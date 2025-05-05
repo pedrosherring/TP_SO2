@@ -7,7 +7,6 @@
 *.pch
 *.vspscc
 *.vssscc
-*.vs
 *.suo
 *.sln.docstates
 *.vcxproj.user
@@ -20,14 +19,3 @@ x86/
 [Bb]in/
 [Oo]bj/
 .vs/
-
-# Arquivos temporários
-*.log
-*.tlog
-*.ipch
-*.db
-
-# Pastas de saída
-/[Pp]rojects/*/x64/
-/[Pp]rojects/*/Debug/
-/[Pp]rojects/*/Release/
