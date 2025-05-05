@@ -21,8 +21,8 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{222a5e5e-277b-4126-8938-afcc43e93583}</ProjectGuid>
-    <RootNamespace>arbitro</RootNamespace>
+    <ProjectGuid>{5de969ac-b1bd-4856-9c4f-b21eb86e6ddb}</ProjectGuid>
+    <RootNamespace>jogoui</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -127,10 +127,10 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="arbitro.c" />
+    <ClCompile Include="jogoui.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="arbitro.h" />
+    <ClInclude Include="jogoui.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
