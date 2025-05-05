@@ -18,4 +18,7 @@ x64/
 x86/
 [Bb]in/
 [Oo]bj/
+TP/.vs/
+TP/x64
 .vs/
+TP/arbitro/x64
