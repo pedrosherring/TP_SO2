@@ -14,17 +14,28 @@ typedef struct {
 typedef struct {
     HANDLE hPipe;
     JOGADOR* jogadores;
-    int* totalJogadores;
+    DWORD* totalJogadores;
     CRITICAL_SECTION* csJogadores;
 } THREAD_ARGS;
 
+//FUN합ES E THREADS
 DWORD WINAPI ThreadCliente(LPVOID param);
 void ConfigurarRegistry(DWORD* maxLetras, DWORD* ritmo);
 
 int _tmain() {
+
+
+#ifdef UNICODE
+    _setmode(_fileno(stdin), _O_WTEXT);
+    _setmode(_fileno(stdout), _O_WTEXT);
+    _setmode(_fileno(stderr), _O_WTEXT);
+#endif
+
+    //REGISTRY
     DWORD maxLetras, ritmo;
     ConfigurarRegistry(&maxLetras, &ritmo);
 
+    //CRIA플O DO SHM
     HANDLE hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
         sizeof(TCHAR) * maxLetras, SHM_NAME);
     if (!hMapFile) {
@@ -39,8 +50,9 @@ int _tmain() {
         return 1;
     }
 
-    _tcscpy_s(pMem, 32, _T("A B C D E F"));
+    // _tcscpy_s(pMem, 32, _T("A B C D E F"));
 
+    //CRIA플O DE MECANISMOS DE SINCRONIZA플O
     HANDLE hEvent = CreateEvent(NULL, TRUE, FALSE, EVENT_NAME);
     if (!hEvent) {
         _tprintf(_T("Erro ao criar evento.\n"));
@@ -49,18 +61,12 @@ int _tmain() {
         return 1;
     }
 
-#ifdef UNICODE
-    _setmode(_fileno(stdin), _O_WTEXT);
-    _setmode(_fileno(stdout), _O_WTEXT);
-    _setmode(_fileno(stderr), _O_WTEXT);
-#endif
-
     JOGADOR jogadores[20] = { 0 };
-    int totalJogadores = 0;
+    DWORD totalJogadores = 0;
     CRITICAL_SECTION csJogadores;
     InitializeCriticalSection(&csJogadores);
 
-    _tprintf_s(_T("[ARBITRO] Esperando jogadores...\n"));
+    _tprintf_s(_T("[ARBITRO] Iniciando. Esperando jogadores...\n"));
     while (1) {
         HANDLE hPipe = CreateNamedPipe(
             PIPE_NAME,
@@ -79,13 +85,15 @@ int _tmain() {
             continue;
         }
 
-        THREAD_ARGS* args = (THREAD_ARGS*)malloc(sizeof(THREAD_ARGS));
+        THREAD_ARGS* args = malloc(sizeof(THREAD_ARGS));
         args->hPipe = hPipe;
         args->jogadores = jogadores;
         args->totalJogadores = &totalJogadores;
         args->csJogadores = &csJogadores;
         CreateThread(NULL, 0, ThreadCliente, args, 0, NULL);
     }
+
+
 
     UnmapViewOfFile(pMem);
     CloseHandle(hMapFile);
@@ -98,7 +106,7 @@ DWORD WINAPI ThreadCliente(LPVOID param) {
     THREAD_ARGS* args = (THREAD_ARGS*)param;
     HANDLE hPipe = args->hPipe;
     JOGADOR* jogadores = args->jogadores;
-    int* totalJogadores = args->totalJogadores;
+    DWORD* totalJogadores = args->totalJogadores;
     CRITICAL_SECTION* cs = args->csJogadores;
 
     MESSAGE msg;
