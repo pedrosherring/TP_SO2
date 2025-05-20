@@ -1,5 +1,6 @@
 A
 B
+BA
 C
 D
 E
@@ -14,7 +15,6 @@ M
 N
 O
 P
-Q
 R
 S
 T

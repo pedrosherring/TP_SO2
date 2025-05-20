@@ -1,0 +1,26 @@
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.sln.docstates
+
+# Build output
+[Bb]in/
+[Oo]bj/
+[Rr]elease/
+[Dd]ebug/
+x64/
+Win32/
+*.pdb
+*.dll
+*.exe
+*.ilk
+*.exp
+*.lib
+*.obj
+
+# Other common ignores
+*.log
+*.cache
+*.[Cc]ache
+*.tmp
