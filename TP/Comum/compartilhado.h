@@ -65,6 +65,7 @@ typedef struct {
 } DadosJogoCompartilhados;
 
 
+
 // NOTA: O seu 'arbitro.c' simplificado tinha uma formatação de letras com espaços na SHM.
 // A estrutura DadosJogoCompartilhados acima armazena apenas as letras. A formatação para display
 // ('A B _ C') deve ser feita pelo cliente (jogoui/painel) ao ler 'letrasVisiveis'.
