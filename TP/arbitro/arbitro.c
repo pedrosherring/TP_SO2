@@ -10,17 +10,20 @@
 
 #include "../Comum/compartilhado.h" // Ficheiro revisto
 
-// Definição manual de _countof se não estiver disponível (comum em alguns compiladores/configurações)
+// Definição manual de _countof se não estiver disponível
 #ifndef _countof
 #define _countof(array) (sizeof(array) / sizeof(array[0]))
 #endif
 
 // Definições de Timeout
-#define IO_TIMEOUT 5000 
-#define CONNECT_TIMEOUT 500 
-#define READ_TIMEOUT_THREAD_JOGADOR 500 
+#define IO_TIMEOUT 5000
+#define CONNECT_TIMEOUT 500
+#define READ_TIMEOUT_THREAD_JOGADOR 500
 
-// Estruturas internas do Árbitro
+
+#define MIN_JOGADORES_PARA_INICIAR 2
+
+// Estruturas internas do árbitro (mantidas, pois são usadas dentro do SERVER_CONTEXT)
 typedef struct {
     TCHAR** palavras;
     DWORD totalPalavras;
@@ -35,75 +38,65 @@ typedef struct {
     DWORD dwThreadIdCliente;
 } JOGADOR_INFO_ARBITRO;
 
-// Argumentos para as threads de cliente e letras
+// ESTRUTURA PRINCIPAL PARA O ESTADO DO SERVIDOR (NÃO MAIS GLOBAL)
 typedef struct {
-    HANDLE hPipeCliente;
+    // Gestão de Jogadores
+    JOGADOR_INFO_ARBITRO listaJogadores[MAX_JOGADORES];
+    DWORD totalJogadoresAtivos;
+    CRITICAL_SECTION csListaJogadores;
 
-    JOGADOR_INFO_ARBITRO* jogadores;
-    DWORD* pTotalJogadoresAtivos;
-    CRITICAL_SECTION* pcsListaJogadores;
-
+    // Memória Partilhada
     DadosJogoCompartilhados* pDadosShm;
+    HANDLE hMapFileShm; // Necessário para cleanup
     HANDLE hEventoShmUpdate;
     HANDLE hMutexShm;
 
-    DICIONARIO_ARBITRO* pDicionario;
+    // Dicionário
+    DICIONARIO_ARBITRO dicionario;
 
-    int* pMaxLetrasConfig;
-    int* pRitmoConfigSegundos;
+    // Configurações do Jogo
+    int maxLetrasConfig;
+    int ritmoConfigSegundos;
 
-    volatile BOOL* pServidorEmExecucao;
-    volatile BOOL* pJogoRealmenteAtivo;
+    // Controlo do Servidor e Jogo
+    volatile BOOL servidorEmExecucao;
+    volatile BOOL jogoRealmenteAtivo;
 
-} THREAD_ARGS_ARBITRO;
+    // Controlo de Logs
+    CRITICAL_SECTION csLog; // Esta será usada pelas funções de Log
+} SERVER_CONTEXT;
+
+// ESTRUTURA DE ARGUMENTOS PARA AS THREADS (permanece igual)
+typedef struct {
+    SERVER_CONTEXT* serverCtx;   // Ponteiro para o contexto do servidor (agora local em _tmain)
+    HANDLE hPipeCliente;         // Específico para ThreadClienteConectado, INVALID_HANDLE_VALUE para outras
+} THREAD_ARGS;
 
 // ==========================================================================================
-// PROTÓTIPOS DE FUNÇÕES INTERNAS
+// PROTÓTIPOS DE FUNÇÕES INTERNAS (agora, Log* também recebem csLog)
 // ==========================================================================================
-void Log(const TCHAR* format, ...);
-void LogError(const TCHAR* format, ...);
-void LogWarning(const TCHAR* format, ...);
+void Log(CRITICAL_SECTION* csLogParam, const TCHAR* format, ...);
+void LogError(CRITICAL_SECTION* csLogParam, const TCHAR* format, ...);
+void LogWarning(CRITICAL_SECTION* csLogParam, const TCHAR* format, ...);
 
-BOOL InicializarServidor();
-void EncerrarServidor();
-void ConfigurarValoresRegistry(int* maxLetras, int* ritmoSegundos);
-BOOL CarregarDicionarioServidor(DICIONARIO_ARBITRO* dict, const TCHAR* nomeArquivo);
-void LiberarDicionarioServidor(DICIONARIO_ARBITRO* dict);
-BOOL InicializarMemoriaPartilhadaArbitro(int maxLetras);
-void LimparMemoriaPartilhadaArbitro();
+BOOL InicializarServidor(SERVER_CONTEXT* ctx); // Recebe SERVER_CONTEXT*
+void EncerrarServidor(SERVER_CONTEXT* ctx);    // Recebe SERVER_CONTEXT*
+void ConfigurarValoresRegistry(SERVER_CONTEXT* ctx); // Recebe SERVER_CONTEXT*
+BOOL CarregarDicionarioServidor(SERVER_CONTEXT* ctx, const TCHAR* nomeArquivo);
+void LiberarDicionarioServidor(SERVER_CONTEXT* ctx);
+BOOL InicializarMemoriaPartilhadaArbitro(SERVER_CONTEXT* ctx, int maxLetras);
+void LimparMemoriaPartilhadaArbitro(SERVER_CONTEXT* ctx);
 
 DWORD WINAPI ThreadGestorLetras(LPVOID param);
 DWORD WINAPI ThreadAdminArbitro(LPVOID param);
 DWORD WINAPI ThreadClienteConectado(LPVOID param);
 
-void RemoverJogador(const TCHAR* username, BOOL notificarClienteParaSair);
-int EncontrarJogador(const TCHAR* username);
-void NotificarTodosOsJogadores(const MESSAGE* msgAEnviar, const TCHAR* skipUsername); // Protótipo
-BOOL ValidarPalavraJogo(const TCHAR* palavraSubmetida, const TCHAR* usernameJogador, THREAD_ARGS_ARBITRO* argsClienteThread);
-void VerificarEstadoJogo();
+void RemoverJogador(SERVER_CONTEXT* ctx, const TCHAR* username, BOOL notificarClienteParaSair);
+int EncontrarJogador(SERVER_CONTEXT* ctx, const TCHAR* username);
+void NotificarTodosOsJogadores(SERVER_CONTEXT* ctx, const MESSAGE* msgAEnviar, const TCHAR* skipUsername);
+BOOL ValidarPalavraJogo(THREAD_ARGS* argsClienteThread, const TCHAR* palavraSubmetida, const TCHAR* usernameJogador);
+void VerificarEstadoJogo(SERVER_CONTEXT* ctx);
 
-
-// ==========================================================================================
-// VARIÁVEIS GLOBAIS DO ÁRBITRO
-// ==========================================================================================
-JOGADOR_INFO_ARBITRO g_listaJogadores[MAX_JOGADORES];
-DWORD g_totalJogadoresAtivos = 0;
-CRITICAL_SECTION g_csListaJogadores;
-
-DadosJogoCompartilhados* g_pDadosShm = NULL;
-HANDLE g_hMapFileShm = NULL;
-HANDLE g_hEventoShmUpdate = NULL;
-HANDLE g_hMutexShm = NULL;
-
-DICIONARIO_ARBITRO g_dicionario;
-
-int g_maxLetrasConfig = DEFAULT_MAXLETRAS;
-int g_ritmoConfigSegundos = DEFAULT_RITMO_SEGUNDOS;
-
-volatile BOOL g_servidorEmExecucao = TRUE;
-volatile BOOL g_jogoRealmenteAtivo = FALSE;
-
-CRITICAL_SECTION g_csLog;
 
 // ==========================================================================================
 // FUNÇÃO PRINCIPAL - _tmain
@@ -115,53 +108,47 @@ int _tmain(int argc, TCHAR* argv[]) {
     (void)_setmode(_fileno(stderr), _O_WTEXT);
 #endif
 
-    InitializeCriticalSection(&g_csLog);
-    Log(_T("[ARBITRO] Iniciando Árbitro..."));
+    SERVER_CONTEXT serverCtx; // Instância local do contexto do servidor
+    ZeroMemory(&serverCtx, sizeof(SERVER_CONTEXT));
 
-    if (!InicializarServidor()) {
-        LogError(_T("[ARBITRO] Falha ao inicializar o servidor. Encerrando."));
-        EncerrarServidor();
-        DeleteCriticalSection(&g_csLog);
+    // Inicializar csLog ANTES de qualquer chamada a Log()
+    InitializeCriticalSection(&serverCtx.csLog);
+
+    Log(&serverCtx.csLog, _T("[ARBITRO] Iniciando árbitro..."));
+
+    if (!InicializarServidor(&serverCtx)) { // Passa o ponteiro para o contexto local
+        LogError(&serverCtx.csLog, _T("[ARBITRO] Falha ao inicializar o servidor. Encerrando."));
+        EncerrarServidor(&serverCtx); // Passa o contexto
+        DeleteCriticalSection(&serverCtx.csLog);
         return 1;
     }
 
     HANDLE hThreads[2] = { NULL, NULL };
-    THREAD_ARGS_ARBITRO argsGlobais;
-    ZeroMemory(&argsGlobais, sizeof(THREAD_ARGS_ARBITRO));
-    argsGlobais.jogadores = g_listaJogadores;
-    argsGlobais.pTotalJogadoresAtivos = &g_totalJogadoresAtivos;
-    argsGlobais.pcsListaJogadores = &g_csListaJogadores;
-    argsGlobais.pDadosShm = g_pDadosShm;
-    argsGlobais.hEventoShmUpdate = g_hEventoShmUpdate;
-    argsGlobais.hMutexShm = g_hMutexShm;
-    argsGlobais.pDicionario = &g_dicionario;
-    argsGlobais.pMaxLetrasConfig = &g_maxLetrasConfig;
-    argsGlobais.pRitmoConfigSegundos = &g_ritmoConfigSegundos;
-    argsGlobais.pServidorEmExecucao = &g_servidorEmExecucao;
-    argsGlobais.pJogoRealmenteAtivo = &g_jogoRealmenteAtivo;
+    THREAD_ARGS argsServico; // Argumentos para threads de serviço (GestorLetras, Admin)
+    argsServico.serverCtx = &serverCtx; // Aponta para o contexto local
+    argsServico.hPipeCliente = INVALID_HANDLE_VALUE;
 
-
-    hThreads[0] = CreateThread(NULL, 0, ThreadGestorLetras, &argsGlobais, 0, NULL);
+    hThreads[0] = CreateThread(NULL, 0, ThreadGestorLetras, &argsServico, 0, NULL);
     if (hThreads[0] == NULL) {
-        LogError(_T("[ARBITRO] Falha ao criar ThreadGestorLetras. Encerrando."));
-        g_servidorEmExecucao = FALSE;
-        EncerrarServidor();
-        DeleteCriticalSection(&g_csLog);
+        LogError(&serverCtx.csLog, _T("[ARBITRO] Falha ao criar ThreadGestorLetras. Encerrando."));
+        serverCtx.servidorEmExecucao = FALSE;
+        EncerrarServidor(&serverCtx);
+        DeleteCriticalSection(&serverCtx.csLog);
         return 1;
     }
-    hThreads[1] = CreateThread(NULL, 0, ThreadAdminArbitro, &argsGlobais, 0, NULL);
+    hThreads[1] = CreateThread(NULL, 0, ThreadAdminArbitro, &argsServico, 0, NULL);
     if (hThreads[1] == NULL) {
-        LogError(_T("[ARBITRO] Falha ao criar ThreadAdminArbitro. Encerrando."));
-        g_servidorEmExecucao = FALSE;
+        LogError(&serverCtx.csLog, _T("[ARBITRO] Falha ao criar ThreadAdminArbitro. Encerrando."));
+        serverCtx.servidorEmExecucao = FALSE;
         if (hThreads[0] != NULL) { WaitForSingleObject(hThreads[0], INFINITE); CloseHandle(hThreads[0]); }
-        EncerrarServidor();
-        DeleteCriticalSection(&g_csLog);
+        EncerrarServidor(&serverCtx);
+        DeleteCriticalSection(&serverCtx.csLog);
         return 1;
     }
 
-    Log(_T("[ARBITRO] Servidor pronto. Aguardando conexões de jogadores em %s"), PIPE_NAME);
+    Log(&serverCtx.csLog, _T("[ARBITRO] Servidor pronto. Aguardando conexões de jogadores em %s"), PIPE_NAME);
 
-    while (g_servidorEmExecucao) {
+    while (serverCtx.servidorEmExecucao) {
         HANDLE hPipe = CreateNamedPipe(
             PIPE_NAME,
             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
@@ -173,8 +160,8 @@ int _tmain(int argc, TCHAR* argv[]) {
             NULL);
 
         if (hPipe == INVALID_HANDLE_VALUE) {
-            if (g_servidorEmExecucao) {
-                LogError(_T("[ARBITRO] Falha ao criar Named Pipe (instância): %lu"), GetLastError());
+            if (serverCtx.servidorEmExecucao) {
+                LogError(&serverCtx.csLog, _T("[ARBITRO] Falha ao criar Named Pipe (instância): %lu"), GetLastError());
                 Sleep(1000);
             }
             continue;
@@ -184,7 +171,7 @@ int _tmain(int argc, TCHAR* argv[]) {
         ZeroMemory(&ov, sizeof(OVERLAPPED));
         ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
         if (ov.hEvent == NULL) {
-            LogError(_T("[ARBITRO] Falha ao criar evento para ConnectNamedPipe: %lu"), GetLastError());
+            LogError(&serverCtx.csLog, _T("[ARBITRO] Falha ao criar evento para ConnectNamedPipe: %lu"), GetLastError());
             CloseHandle(hPipe);
             continue;
         }
@@ -195,15 +182,14 @@ int _tmain(int argc, TCHAR* argv[]) {
             if (dwWaitResult == WAIT_OBJECT_0) {
                 DWORD dwDummy;
                 fConnected = GetOverlappedResult(hPipe, &ov, &dwDummy, FALSE);
-                if (!fConnected) LogError(_T("[ARBITRO] GetOverlappedResult falhou após evento: %lu"), GetLastError());
+                if (!fConnected) LogError(&serverCtx.csLog, _T("[ARBITRO] GetOverlappedResult falhou após evento: %lu"), GetLastError());
             }
             else if (dwWaitResult == WAIT_TIMEOUT) {
-                //LogWarning(_T("[ARBITRO] Timeout (%dms) ao aguardar conexão no pipe %p. Cancelando."), CONNECT_TIMEOUT, hPipe);
                 CancelIo(hPipe);
                 fConnected = FALSE;
             }
             else {
-                LogError(_T("[ARBITRO] Erro %lu ao aguardar conexão no pipe %p."), GetLastError(), hPipe);
+                LogError(&serverCtx.csLog, _T("[ARBITRO] Erro %lu ao aguardar conexão no pipe %p."), GetLastError(), hPipe);
                 fConnected = FALSE;
             }
         }
@@ -211,29 +197,28 @@ int _tmain(int argc, TCHAR* argv[]) {
             fConnected = TRUE;
         }
         else if (!fConnected) {
-            LogError(_T("[ARBITRO] ConnectNamedPipe falhou imediatamente: %lu"), GetLastError());
+            LogError(&serverCtx.csLog, _T("[ARBITRO] ConnectNamedPipe falhou imediatamente: %lu"), GetLastError());
         }
-
         CloseHandle(ov.hEvent);
 
-        if (fConnected && g_servidorEmExecucao) {
-            EnterCriticalSection(&g_csListaJogadores);
-            if (g_totalJogadoresAtivos < MAX_JOGADORES) {
-                LeaveCriticalSection(&g_csListaJogadores);
+        if (fConnected && serverCtx.servidorEmExecucao) {
+            EnterCriticalSection(&serverCtx.csListaJogadores);
+            if (serverCtx.totalJogadoresAtivos < MAX_JOGADORES) {
+                LeaveCriticalSection(&serverCtx.csListaJogadores);
 
-                THREAD_ARGS_ARBITRO* argsCliente = (THREAD_ARGS_ARBITRO*)malloc(sizeof(THREAD_ARGS_ARBITRO));
+                THREAD_ARGS* argsCliente = (THREAD_ARGS*)malloc(sizeof(THREAD_ARGS));
                 if (argsCliente == NULL) {
-                    LogError(_T("[ARBITRO] Falha ao alocar memória para THREAD_ARGS_ARBITRO."));
+                    LogError(&serverCtx.csLog, _T("[ARBITRO] Falha ao alocar memória para THREAD_ARGS."));
                     DisconnectNamedPipe(hPipe);
                     CloseHandle(hPipe);
                 }
                 else {
-                    *argsCliente = argsGlobais;
-                    argsCliente->hPipeCliente = hPipe;
+                    argsCliente->serverCtx = &serverCtx; // Passa o contexto do servidor
+                    argsCliente->hPipeCliente = hPipe;   // Passa o pipe específico do cliente
 
                     HANDLE hThreadCliente = CreateThread(NULL, 0, ThreadClienteConectado, argsCliente, 0, NULL);
                     if (hThreadCliente == NULL) {
-                        LogError(_T("[ARBITRO] Falha ao criar ThreadClienteConectado para pipe %p: %lu"), hPipe, GetLastError());
+                        LogError(&serverCtx.csLog, _T("[ARBITRO] Falha ao criar ThreadClienteConectado para pipe %p: %lu"), hPipe, GetLastError());
                         free(argsCliente);
                         DisconnectNamedPipe(hPipe);
                         CloseHandle(hPipe);
@@ -244,8 +229,8 @@ int _tmain(int argc, TCHAR* argv[]) {
                 }
             }
             else {
-                LeaveCriticalSection(&g_csListaJogadores);
-                LogWarning(_T("[ARBITRO] Jogo cheio. Rejeitando conexão no pipe %p."), hPipe);
+                LeaveCriticalSection(&serverCtx.csListaJogadores);
+                LogWarning(&serverCtx.csLog, _T("[ARBITRO] Jogo cheio. Rejeitando conexão no pipe %p."), hPipe);
                 MESSAGE msgCheio; ZeroMemory(&msgCheio, sizeof(MESSAGE));
                 StringCchCopy(msgCheio.type, _countof(msgCheio.type), _T("JOIN_GAME_FULL"));
                 StringCchCopy(msgCheio.username, _countof(msgCheio.username), _T("Arbitro"));
@@ -258,65 +243,67 @@ int _tmain(int argc, TCHAR* argv[]) {
         }
         else {
             if (hPipe != INVALID_HANDLE_VALUE) {
-                //if (g_servidorEmExecucao) LogWarning(_T("[ARBITRO] Conexão não estabelecida ou servidor a encerrar para pipe %p. Fechando."), hPipe);
                 CloseHandle(hPipe);
             }
         }
     }
 
-    Log(_T("[ARBITRO] Loop principal de aceitação de conexões terminado."));
+    Log(&serverCtx.csLog, _T("[ARBITRO] Loop principal de aceitação de conexões terminado."));
     if (hThreads[0] != NULL) { WaitForSingleObject(hThreads[0], INFINITE); CloseHandle(hThreads[0]); }
     if (hThreads[1] != NULL) { WaitForSingleObject(hThreads[1], INFINITE); CloseHandle(hThreads[1]); }
 
-    EncerrarServidor();
-    Log(_T("[ARBITRO] Servidor encerrado."));
-    DeleteCriticalSection(&g_csLog);
+    EncerrarServidor(&serverCtx);
+    Log(&serverCtx.csLog, _T("[ARBITRO] Servidor encerrado."));
+    DeleteCriticalSection(&serverCtx.csLog);
     return 0;
 }
-
 
 // ==========================================================================================
 // INICIALIZAÇÃO E ENCERRAMENTO DO SERVIDOR
 // ==========================================================================================
-BOOL InicializarServidor() {
+BOOL InicializarServidor(SERVER_CONTEXT* ctx) {
     srand((unsigned)time(NULL));
-    ConfigurarValoresRegistry(&g_maxLetrasConfig, &g_ritmoConfigSegundos);
-    Log(_T("[INIT] Configurações: MAXLETRAS=%d, RITMO=%ds"), g_maxLetrasConfig, g_ritmoConfigSegundos);
 
-    if (!CarregarDicionarioServidor(&g_dicionario, _T("dicionario.txt"))) {
-        LogError(_T("[INIT] Falha ao carregar dicionário."));
+    // csLog já deve estar inicializada em _tmain ANTES desta função ser chamada.
+    // ConfigurarValoresRegistry e CarregarDicionarioServidor usarão Log, por isso csLog deve estar pronta.
+
+    ConfigurarValoresRegistry(ctx);
+    Log(&ctx->csLog, _T("[INIT] Configurações: MAXLETRAS=%d, RITMO=%ds"), ctx->maxLetrasConfig, ctx->ritmoConfigSegundos);
+
+    if (!CarregarDicionarioServidor(ctx, _T("dicionario.txt"))) {
+        LogError(&ctx->csLog, _T("[INIT] Falha ao carregar dicionário."));
         return FALSE;
     }
 
-    if (!InicializarMemoriaPartilhadaArbitro(g_maxLetrasConfig)) {
-        LogError(_T("[INIT] Falha ao inicializar memória partilhada."));
-        LiberarDicionarioServidor(&g_dicionario);
+    if (!InicializarMemoriaPartilhadaArbitro(ctx, ctx->maxLetrasConfig)) {
+        LogError(&ctx->csLog, _T("[INIT] Falha ao inicializar memória partilhada."));
+        LiberarDicionarioServidor(ctx);
         return FALSE;
     }
 
-    InitializeCriticalSection(&g_csListaJogadores);
+    InitializeCriticalSection(&ctx->csListaJogadores);
 
-    ZeroMemory(g_listaJogadores, sizeof(g_listaJogadores));
-    g_totalJogadoresAtivos = 0;
-    g_servidorEmExecucao = TRUE;
-    g_jogoRealmenteAtivo = FALSE;
+    ZeroMemory(ctx->listaJogadores, sizeof(ctx->listaJogadores));
+    ctx->totalJogadoresAtivos = 0;
+    ctx->servidorEmExecucao = TRUE;
+    ctx->jogoRealmenteAtivo = FALSE;
 
     return TRUE;
 }
 
-void EncerrarServidor() {
-    Log(_T("[ENCERRAR] Iniciando encerramento do servidor..."));
+void EncerrarServidor(SERVER_CONTEXT* ctx) {
+    Log(&ctx->csLog, _T("[ENCERRAR] Iniciando encerramento do servidor..."));
 
-    if (g_servidorEmExecucao) {
-        g_servidorEmExecucao = FALSE;
+    if (ctx->servidorEmExecucao) {
+        ctx->servidorEmExecucao = FALSE;
 
         MESSAGE msgShutdown; ZeroMemory(&msgShutdown, sizeof(MESSAGE));
         StringCchCopy(msgShutdown.type, _countof(msgShutdown.type), _T("SHUTDOWN"));
         StringCchCopy(msgShutdown.username, _countof(msgShutdown.username), _T("Arbitro"));
         StringCchCopy(msgShutdown.data, _countof(msgShutdown.data), _T("O servidor está a encerrar."));
-        NotificarTodosOsJogadores(&msgShutdown, NULL);
+        NotificarTodosOsJogadores(ctx, &msgShutdown, NULL);
 
-        if (g_hEventoShmUpdate) SetEvent(g_hEventoShmUpdate);
+        if (ctx->hEventoShmUpdate) SetEvent(ctx->hEventoShmUpdate);
 
         HANDLE hSelfConnect = CreateFile(PIPE_NAME, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
         if (hSelfConnect != INVALID_HANDLE_VALUE) {
@@ -324,51 +311,51 @@ void EncerrarServidor() {
         }
     }
 
-    Log(_T("[ENCERRAR] Aguardando um momento para as threads de cliente... (1s)"));
+    Log(&ctx->csLog, _T("[ENCERRAR] Aguardando um momento para as threads de cliente... (1s)"));
     Sleep(1000);
 
-    if (g_csListaJogadores.DebugInfo != NULL) {
-        EnterCriticalSection(&g_csListaJogadores);
+    if (ctx->csListaJogadores.DebugInfo != NULL) {
+        EnterCriticalSection(&ctx->csListaJogadores);
         for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
-            if (g_listaJogadores[i].hPipe != INVALID_HANDLE_VALUE) {
-                LogWarning(_T("[ENCERRAR] Pipe do jogador %s (idx %lu) ainda aberto. Fechando."), g_listaJogadores[i].username, i);
-                CloseHandle(g_listaJogadores[i].hPipe);
-                g_listaJogadores[i].hPipe = INVALID_HANDLE_VALUE;
+            if (ctx->listaJogadores[i].hPipe != INVALID_HANDLE_VALUE) {
+                LogWarning(&ctx->csLog, _T("[ENCERRAR] Pipe do jogador %s (idx %lu) ainda aberto. Fechando."), ctx->listaJogadores[i].username, i);
+                CloseHandle(ctx->listaJogadores[i].hPipe);
+                ctx->listaJogadores[i].hPipe = INVALID_HANDLE_VALUE;
             }
-            g_listaJogadores[i].ativo = FALSE;
+            ctx->listaJogadores[i].ativo = FALSE;
         }
-        g_totalJogadoresAtivos = 0;
-        LeaveCriticalSection(&g_csListaJogadores);
-        DeleteCriticalSection(&g_csListaJogadores);
+        ctx->totalJogadoresAtivos = 0;
+        LeaveCriticalSection(&ctx->csListaJogadores);
+        DeleteCriticalSection(&ctx->csListaJogadores);
     }
     else {
-        LogWarning(_T("[ENCERRAR] Critical section da lista de jogadores não inicializada ou já deletada."));
+        LogWarning(&ctx->csLog, _T("[ENCERRAR] Critical section da lista de jogadores não inicializada ou já deletada."));
     }
 
+    LimparMemoriaPartilhadaArbitro(ctx);
+    LiberarDicionarioServidor(ctx);
 
-    LimparMemoriaPartilhadaArbitro();
-    LiberarDicionarioServidor(&g_dicionario);
-
-    Log(_T("[ENCERRAR] Recursos principais do servidor libertados."));
+    Log(&ctx->csLog, _T("[ENCERRAR] Recursos principais do servidor libertados."));
+    // csLog é deletada em _tmain
 }
 
-
 // ==========================================================================================
-// Funções de Log
+// Funções de Log (agora recebem csLog explicitamente)
 // ==========================================================================================
-void Log(const TCHAR* format, ...) {
-    if (g_csLog.DebugInfo == NULL) {
+void Log(CRITICAL_SECTION* csLogParam, const TCHAR* format, ...) {
+    // csLogParam DEVE ser inicializado pelo chamador antes da primeira chamada.
+    if (csLogParam == NULL || csLogParam->DebugInfo == NULL) { // Fallback se csLogParam não estiver pronto/válido
         TCHAR fallbackBuffer[1024];
         va_list fbArgs;
         va_start(fbArgs, format);
         StringCchVPrintf(fallbackBuffer, _countof(fallbackBuffer), format, fbArgs);
         va_end(fbArgs);
-        _tprintf(_T("[LOG-NO_CS] %s\n"), fallbackBuffer);
+        _tprintf(_T("[LOG-NO_CS_PARAM] %s\n"), fallbackBuffer);
         fflush(stdout);
         return;
     }
 
-    EnterCriticalSection(&g_csLog);
+    EnterCriticalSection(csLogParam);
     TCHAR buffer[2048];
     va_list args;
     va_start(args, format);
@@ -389,99 +376,101 @@ void Log(const TCHAR* format, ...) {
     _tprintf_s(buffer);
     fflush(stdout);
     va_end(args);
-    LeaveCriticalSection(&g_csLog);
-}
-void LogError(const TCHAR* format, ...) {
-    TCHAR buffer[1024];
-    va_list args;
-    va_start(args, format);
-    StringCchVPrintf(buffer, _countof(buffer), format, args);
-    va_end(args);
-    Log(_T("[ERRO] %s"), buffer);
-}
-void LogWarning(const TCHAR* format, ...) {
-    TCHAR buffer[1024];
-    va_list args;
-    va_start(args, format);
-    StringCchVPrintf(buffer, _countof(buffer), format, args);
-    va_end(args);
-    Log(_T("[AVISO] %s"), buffer);
+    LeaveCriticalSection(csLogParam);
 }
 
+void LogError(CRITICAL_SECTION* csLogParam, const TCHAR* format, ...) {
+    TCHAR buffer[1024];
+    va_list args;
+    va_start(args, format);
+    StringCchVPrintf(buffer, _countof(buffer), format, args);
+    va_end(args);
+    Log(csLogParam, _T("[ERRO] %s"), buffer); // Passa csLogParam para Log
+}
+
+void LogWarning(CRITICAL_SECTION* csLogParam, const TCHAR* format, ...) {
+    TCHAR buffer[1024];
+    va_list args;
+    va_start(args, format);
+    StringCchVPrintf(buffer, _countof(buffer), format, args);
+    va_end(args);
+    Log(csLogParam, _T("[AVISO] %s"), buffer); // Passa csLogParam para Log
+}
 
 // ==========================================================================================
 // Implementações das Funções Auxiliares e Threads
+// (Todas as funções que precisam de log agora usam ctx->csLog)
 // ==========================================================================================
 
-void ConfigurarValoresRegistry(int* maxLetras, int* ritmoSegundos) {
+void ConfigurarValoresRegistry(SERVER_CONTEXT* ctx) {
     HKEY hKey;
     DWORD dwValor;
     DWORD dwSize = sizeof(DWORD);
     LONG lResult;
 
-    *maxLetras = DEFAULT_MAXLETRAS;
-    *ritmoSegundos = DEFAULT_RITMO_SEGUNDOS;
+    ctx->maxLetrasConfig = DEFAULT_MAXLETRAS;
+    ctx->ritmoConfigSegundos = DEFAULT_RITMO_SEGUNDOS;
 
     lResult = RegOpenKeyEx(HKEY_CURRENT_USER, REGISTRY_PATH_TP, 0, KEY_READ | KEY_WRITE, &hKey);
     if (lResult == ERROR_SUCCESS) {
         if (RegQueryValueEx(hKey, REG_MAXLETRAS_NOME, NULL, NULL, (LPBYTE)&dwValor, &dwSize) == ERROR_SUCCESS) {
             if (dwValor > 0 && dwValor <= MAX_LETRAS_TABULEIRO) {
-                *maxLetras = (int)dwValor;
+                ctx->maxLetrasConfig = (int)dwValor;
             }
             else {
-                LogWarning(_T("[REG] MAXLETRAS (%lu) inválido. Usando %d e atualizando registry."), dwValor, MAX_LETRAS_TABULEIRO);
-                *maxLetras = MAX_LETRAS_TABULEIRO;
-                RegSetValueEx(hKey, REG_MAXLETRAS_NOME, 0, REG_DWORD, (const BYTE*)maxLetras, sizeof(DWORD));
+                LogWarning(&ctx->csLog, _T("[REG] MAXLETRAS (%lu) inválido. Usando %d e atualizando registry."), dwValor, MAX_LETRAS_TABULEIRO);
+                ctx->maxLetrasConfig = MAX_LETRAS_TABULEIRO;
+                RegSetValueEx(hKey, REG_MAXLETRAS_NOME, 0, REG_DWORD, (const BYTE*)&ctx->maxLetrasConfig, sizeof(DWORD));
             }
         }
         else {
-            LogWarning(_T("[REG] Não leu MAXLETRAS. Usando padrão %d e criando/atualizando."), *maxLetras);
-            RegSetValueEx(hKey, REG_MAXLETRAS_NOME, 0, REG_DWORD, (const BYTE*)maxLetras, sizeof(DWORD));
+            LogWarning(&ctx->csLog, _T("[REG] Não leu MAXLETRAS. Usando padrão %d e criando/atualizando."), ctx->maxLetrasConfig);
+            RegSetValueEx(hKey, REG_MAXLETRAS_NOME, 0, REG_DWORD, (const BYTE*)&ctx->maxLetrasConfig, sizeof(DWORD));
         }
         dwSize = sizeof(DWORD);
         if (RegQueryValueEx(hKey, REG_RITMO_NOME, NULL, NULL, (LPBYTE)&dwValor, &dwSize) == ERROR_SUCCESS) {
             if (dwValor > 0 && dwValor < 300) {
-                *ritmoSegundos = (int)dwValor;
+                ctx->ritmoConfigSegundos = (int)dwValor;
             }
             else {
-                LogWarning(_T("[REG] RITMO (%lu) inválido. Usando padrão %d e atualizando registry."), dwValor, DEFAULT_RITMO_SEGUNDOS);
-                *ritmoSegundos = DEFAULT_RITMO_SEGUNDOS;
-                RegSetValueEx(hKey, REG_RITMO_NOME, 0, REG_DWORD, (const BYTE*)ritmoSegundos, sizeof(DWORD));
+                LogWarning(&ctx->csLog, _T("[REG] RITMO (%lu) inválido. Usando padrão %d e atualizando registry."), dwValor, DEFAULT_RITMO_SEGUNDOS);
+                RegSetValueEx(hKey, REG_RITMO_NOME, 0, REG_DWORD, (const BYTE*)&ctx->ritmoConfigSegundos, sizeof(DWORD));
             }
         }
         else {
-            LogWarning(_T("[REG] Não leu RITMO. Usando padrão %d e criando/atualizando."), *ritmoSegundos);
-            RegSetValueEx(hKey, REG_RITMO_NOME, 0, REG_DWORD, (const BYTE*)ritmoSegundos, sizeof(DWORD));
+            LogWarning(&ctx->csLog, _T("[REG] Não leu RITMO. Usando padrão %d e criando/atualizando."), ctx->ritmoConfigSegundos);
+            RegSetValueEx(hKey, REG_RITMO_NOME, 0, REG_DWORD, (const BYTE*)&ctx->ritmoConfigSegundos, sizeof(DWORD));
         }
         RegCloseKey(hKey);
     }
     else {
-        Log(_T("[REG] Chave '%s' não encontrada/acessível. Criando com valores padrão."), REGISTRY_PATH_TP);
+        Log(&ctx->csLog, _T("[REG] Chave '%s' não encontrada/acessível. Criando com valores padrão."), REGISTRY_PATH_TP);
         if (RegCreateKeyEx(HKEY_CURRENT_USER, REGISTRY_PATH_TP, 0, NULL, REG_OPTION_NON_VOLATILE,
             KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
-            RegSetValueEx(hKey, REG_MAXLETRAS_NOME, 0, REG_DWORD, (const BYTE*)maxLetras, sizeof(DWORD));
-            RegSetValueEx(hKey, REG_RITMO_NOME, 0, REG_DWORD, (const BYTE*)ritmoSegundos, sizeof(DWORD));
+            RegSetValueEx(hKey, REG_MAXLETRAS_NOME, 0, REG_DWORD, (const BYTE*)&ctx->maxLetrasConfig, sizeof(DWORD));
+            RegSetValueEx(hKey, REG_RITMO_NOME, 0, REG_DWORD, (const BYTE*)&ctx->ritmoConfigSegundos, sizeof(DWORD));
             RegCloseKey(hKey);
-            Log(_T("[REG] Chave e valores padrão criados."));
+            Log(&ctx->csLog, _T("[REG] Chave e valores padrão criados."));
         }
         else {
-            LogError(_T("[REG] Falha ao criar chave do Registry '%s': %lu"), REGISTRY_PATH_TP, GetLastError());
+            LogError(&ctx->csLog, _T("[REG] Falha ao criar chave do Registry '%s': %lu"), REGISTRY_PATH_TP, GetLastError());
         }
     }
-    if (*maxLetras > MAX_LETRAS_TABULEIRO) *maxLetras = MAX_LETRAS_TABULEIRO;
-    if (*maxLetras <= 0) *maxLetras = DEFAULT_MAXLETRAS;
-    if (*ritmoSegundos <= 0) *ritmoSegundos = DEFAULT_RITMO_SEGUNDOS;
+    if (ctx->maxLetrasConfig > MAX_LETRAS_TABULEIRO) ctx->maxLetrasConfig = MAX_LETRAS_TABULEIRO;
+    if (ctx->maxLetrasConfig <= 0) ctx->maxLetrasConfig = DEFAULT_MAXLETRAS;
+    if (ctx->ritmoConfigSegundos <= 0) ctx->ritmoConfigSegundos = DEFAULT_RITMO_SEGUNDOS;
 }
 
+BOOL CarregarDicionarioServidor(SERVER_CONTEXT* ctx, const TCHAR* nomeArquivo) {
+    DICIONARIO_ARBITRO* dict = &ctx->dicionario;
 
-BOOL CarregarDicionarioServidor(DICIONARIO_ARBITRO* dict, const TCHAR* nomeArquivo) {
     InitializeCriticalSection(&dict->csDicionario);
     dict->palavras = NULL;
     dict->totalPalavras = 0;
     FILE* arquivo;
 
     if (_tfopen_s(&arquivo, nomeArquivo, _T("r, ccs=UTF-8")) != 0 || !arquivo) {
-        LogError(_T("[DIC] Erro ao abrir ficheiro de dicionário '%s'."), nomeArquivo);
+        LogError(&ctx->csLog, _T("[DIC] Erro ao abrir ficheiro de dicionário '%s'."), nomeArquivo);
         DeleteCriticalSection(&dict->csDicionario);
         return FALSE;
     }
@@ -491,7 +480,7 @@ BOOL CarregarDicionarioServidor(DICIONARIO_ARBITRO* dict, const TCHAR* nomeArqui
     dict->palavras = (TCHAR**)malloc(capacidade * sizeof(TCHAR*));
     if (!dict->palavras) {
         fclose(arquivo);
-        LogError(_T("[DIC] Falha ao alocar memória inicial para dicionário."));
+        LogError(&ctx->csLog, _T("[DIC] Falha ao alocar memória inicial para dicionário."));
         DeleteCriticalSection(&dict->csDicionario);
         return FALSE;
     }
@@ -509,7 +498,7 @@ BOOL CarregarDicionarioServidor(DICIONARIO_ARBITRO* dict, const TCHAR* nomeArqui
             capacidade *= 2;
             TCHAR** temp = (TCHAR**)realloc(dict->palavras, capacidade * sizeof(TCHAR*));
             if (!temp) {
-                LogError(_T("[DIC] Falha ao realocar memória para dicionário."));
+                LogError(&ctx->csLog, _T("[DIC] Falha ao realocar memória para dicionário."));
                 for (DWORD i = 0; i < dict->totalPalavras; i++) free(dict->palavras[i]);
                 free(dict->palavras); dict->palavras = NULL;
                 fclose(arquivo);
@@ -521,7 +510,7 @@ BOOL CarregarDicionarioServidor(DICIONARIO_ARBITRO* dict, const TCHAR* nomeArqui
 
         dict->palavras[dict->totalPalavras] = _tcsdup(linha);
         if (!dict->palavras[dict->totalPalavras]) {
-            LogError(_T("[DIC] Falha ao alocar memória para a palavra '%s'."), linha);
+            LogError(&ctx->csLog, _T("[DIC] Falha ao alocar memória para a palavra '%s'."), linha);
             for (DWORD i = 0; i < dict->totalPalavras; i++) free(dict->palavras[i]);
             free(dict->palavras); dict->palavras = NULL;
             fclose(arquivo);
@@ -534,126 +523,124 @@ BOOL CarregarDicionarioServidor(DICIONARIO_ARBITRO* dict, const TCHAR* nomeArqui
     }
 
     fclose(arquivo);
-    Log(_T("[DIC] Dicionário '%s' carregado com %lu palavras."), nomeArquivo, dict->totalPalavras);
+    Log(&ctx->csLog, _T("[DIC] Dicionário '%s' carregado com %lu palavras."), nomeArquivo, dict->totalPalavras);
     if (dict->totalPalavras == 0) {
-        LogWarning(_T("[DIC] Dicionário carregado está vazio!"));
+        LogWarning(&ctx->csLog, _T("[DIC] Dicionário carregado está vazio!"));
     }
     return TRUE;
 }
 
-void LiberarDicionarioServidor(DICIONARIO_ARBITRO* dict) {
-    if (dict) {
-        if (dict->csDicionario.DebugInfo != NULL) {
-            EnterCriticalSection(&dict->csDicionario);
-            if (dict->palavras) {
-                for (DWORD i = 0; i < dict->totalPalavras; i++) {
-                    free(dict->palavras[i]);
-                }
-                free(dict->palavras);
-                dict->palavras = NULL;
+void LiberarDicionarioServidor(SERVER_CONTEXT* ctx) {
+    DICIONARIO_ARBITRO* dict = &ctx->dicionario;
+    if (dict->csDicionario.DebugInfo != NULL) {
+        EnterCriticalSection(&dict->csDicionario);
+        if (dict->palavras) {
+            for (DWORD i = 0; i < dict->totalPalavras; i++) {
+                free(dict->palavras[i]);
             }
-            dict->totalPalavras = 0;
-            LeaveCriticalSection(&dict->csDicionario);
-            DeleteCriticalSection(&dict->csDicionario);
+            free(dict->palavras);
+            dict->palavras = NULL;
         }
+        dict->totalPalavras = 0;
+        LeaveCriticalSection(&dict->csDicionario);
+        DeleteCriticalSection(&dict->csDicionario);
     }
 }
 
-BOOL InicializarMemoriaPartilhadaArbitro(int maxLetras) {
+BOOL InicializarMemoriaPartilhadaArbitro(SERVER_CONTEXT* ctx, int maxLetras) {
     if (maxLetras <= 0 || maxLetras > MAX_LETRAS_TABULEIRO) {
-        LogError(_T("[SHM] maxLetras inválido (%d) para inicializar memória partilhada."), maxLetras);
+        LogError(&ctx->csLog, _T("[SHM] maxLetras inválido (%d) para inicializar memória partilhada."), maxLetras);
         return FALSE;
     }
 
-    g_hMapFileShm = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(DadosJogoCompartilhados), SHM_NAME);
-    if (g_hMapFileShm == NULL) {
-        LogError(_T("[SHM] Erro ao criar FileMapping (%s): %lu"), SHM_NAME, GetLastError());
+    ctx->hMapFileShm = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(DadosJogoCompartilhados), SHM_NAME);
+    if (ctx->hMapFileShm == NULL) {
+        LogError(&ctx->csLog, _T("[SHM] Erro ao criar FileMapping (%s): %lu"), SHM_NAME, GetLastError());
         return FALSE;
     }
 
-    g_pDadosShm = (DadosJogoCompartilhados*)MapViewOfFile(g_hMapFileShm, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(DadosJogoCompartilhados));
-    if (g_pDadosShm == NULL) {
-        LogError(_T("[SHM] Erro ao mapear SHM (%s): %lu"), SHM_NAME, GetLastError());
-        CloseHandle(g_hMapFileShm); g_hMapFileShm = NULL;
+    ctx->pDadosShm = (DadosJogoCompartilhados*)MapViewOfFile(ctx->hMapFileShm, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(DadosJogoCompartilhados));
+    if (ctx->pDadosShm == NULL) {
+        LogError(&ctx->csLog, _T("[SHM] Erro ao mapear SHM (%s): %lu"), SHM_NAME, GetLastError());
+        CloseHandle(ctx->hMapFileShm); ctx->hMapFileShm = NULL;
         return FALSE;
     }
 
-    g_hEventoShmUpdate = CreateEvent(NULL, TRUE, FALSE, EVENT_SHM_UPDATE);
-    if (g_hEventoShmUpdate == NULL) {
-        LogError(_T("[SHM] Erro ao criar evento SHM (%s): %lu"), EVENT_SHM_UPDATE, GetLastError());
-        UnmapViewOfFile(g_pDadosShm); g_pDadosShm = NULL;
-        CloseHandle(g_hMapFileShm); g_hMapFileShm = NULL;
+    ctx->hEventoShmUpdate = CreateEvent(NULL, TRUE, FALSE, EVENT_SHM_UPDATE);
+    if (ctx->hEventoShmUpdate == NULL) {
+        LogError(&ctx->csLog, _T("[SHM] Erro ao criar evento SHM (%s): %lu"), EVENT_SHM_UPDATE, GetLastError());
+        UnmapViewOfFile(ctx->pDadosShm); ctx->pDadosShm = NULL;
+        CloseHandle(ctx->hMapFileShm); ctx->hMapFileShm = NULL;
         return FALSE;
     }
 
-    g_hMutexShm = CreateMutex(NULL, FALSE, MUTEX_SHARED_MEM);
-    if (g_hMutexShm == NULL) {
-        LogError(_T("[SHM] Erro ao criar mutex SHM (%s): %lu"), MUTEX_SHARED_MEM, GetLastError());
-        CloseHandle(g_hEventoShmUpdate); g_hEventoShmUpdate = NULL;
-        UnmapViewOfFile(g_pDadosShm); g_pDadosShm = NULL;
-        CloseHandle(g_hMapFileShm); g_hMapFileShm = NULL;
+    ctx->hMutexShm = CreateMutex(NULL, FALSE, MUTEX_SHARED_MEM);
+    if (ctx->hMutexShm == NULL) {
+        LogError(&ctx->csLog, _T("[SHM] Erro ao criar mutex SHM (%s): %lu"), MUTEX_SHARED_MEM, GetLastError());
+        CloseHandle(ctx->hEventoShmUpdate); ctx->hEventoShmUpdate = NULL;
+        UnmapViewOfFile(ctx->pDadosShm); ctx->pDadosShm = NULL;
+        CloseHandle(ctx->hMapFileShm); ctx->hMapFileShm = NULL;
         return FALSE;
     }
 
-    WaitForSingleObject(g_hMutexShm, INFINITE);
-    g_pDadosShm->numMaxLetrasAtual = maxLetras;
+    WaitForSingleObject(ctx->hMutexShm, INFINITE);
+    ctx->pDadosShm->numMaxLetrasAtual = maxLetras;
     for (int i = 0; i < MAX_LETRAS_TABULEIRO; i++) {
-        g_pDadosShm->letrasVisiveis[i] = (i < maxLetras) ? _T('_') : _T('\0');
+        ctx->pDadosShm->letrasVisiveis[i] = (i < maxLetras) ? _T('_') : _T('\0');
     }
-    StringCchCopy(g_pDadosShm->ultimaPalavraIdentificada, MAX_WORD, _T(""));
-    StringCchCopy(g_pDadosShm->usernameUltimaPalavra, MAX_USERNAME, _T(""));
-    g_pDadosShm->pontuacaoUltimaPalavra = 0;
-    g_pDadosShm->generationCount = 0;
-    g_pDadosShm->jogoAtivo = FALSE;
-    ReleaseMutex(g_hMutexShm);
-    SetEvent(g_hEventoShmUpdate);
+    StringCchCopy(ctx->pDadosShm->ultimaPalavraIdentificada, MAX_WORD, _T(""));
+    StringCchCopy(ctx->pDadosShm->usernameUltimaPalavra, MAX_USERNAME, _T(""));
+    ctx->pDadosShm->pontuacaoUltimaPalavra = 0;
+    ctx->pDadosShm->generationCount = 0;
+    ctx->pDadosShm->jogoAtivo = FALSE;
+    ReleaseMutex(ctx->hMutexShm);
+    SetEvent(ctx->hEventoShmUpdate);
 
-    Log(_T("[SHM] Memória partilhada '%s' e evento '%s' inicializados."), SHM_NAME, EVENT_SHM_UPDATE);
+    Log(&ctx->csLog, _T("[SHM] Memória partilhada '%s' e evento '%s' inicializados."), SHM_NAME, EVENT_SHM_UPDATE);
     return TRUE;
 }
 
-void LimparMemoriaPartilhadaArbitro() {
-    if (g_pDadosShm != NULL) UnmapViewOfFile(g_pDadosShm);
-    g_pDadosShm = NULL;
-    if (g_hMapFileShm != NULL) CloseHandle(g_hMapFileShm);
-    g_hMapFileShm = NULL;
-    if (g_hEventoShmUpdate != NULL) CloseHandle(g_hEventoShmUpdate);
-    g_hEventoShmUpdate = NULL;
-    if (g_hMutexShm != NULL) CloseHandle(g_hMutexShm);
-    g_hMutexShm = NULL;
-    Log(_T("[SHM] Memória partilhada e objetos de sync limpos."));
+void LimparMemoriaPartilhadaArbitro(SERVER_CONTEXT* ctx) {
+    if (ctx->pDadosShm != NULL) UnmapViewOfFile(ctx->pDadosShm);
+    ctx->pDadosShm = NULL;
+    if (ctx->hMapFileShm != NULL) CloseHandle(ctx->hMapFileShm);
+    ctx->hMapFileShm = NULL;
+    if (ctx->hEventoShmUpdate != NULL) CloseHandle(ctx->hEventoShmUpdate);
+    ctx->hEventoShmUpdate = NULL;
+    if (ctx->hMutexShm != NULL) CloseHandle(ctx->hMutexShm);
+    ctx->hMutexShm = NULL;
+    Log(&ctx->csLog, _T("[SHM] Memória partilhada e objetos de sync limpos."));
 }
-
 
 DWORD WINAPI ThreadGestorLetras(LPVOID param) {
-    THREAD_ARGS_ARBITRO* args = (THREAD_ARGS_ARBITRO*)param;
+    THREAD_ARGS* args = (THREAD_ARGS*)param;
+    SERVER_CONTEXT* ctx = args->serverCtx;
     int indiceLetraAntiga = 0;
-    Log(_T("[LETRAS] ThreadGestorLetras iniciada."));
+    Log(&ctx->csLog, _T("[LETRAS] ThreadGestorLetras iniciada."));
 
-    while (*(args->pServidorEmExecucao)) {
+    while (ctx->servidorEmExecucao) {
         int ritmoAtual;
-        WaitForSingleObject(args->hMutexShm, INFINITE);
-        ritmoAtual = *(args->pRitmoConfigSegundos);
-        ReleaseMutex(args->hMutexShm);
+        WaitForSingleObject(ctx->hMutexShm, INFINITE);
+        ritmoAtual = ctx->ritmoConfigSegundos;
+        ReleaseMutex(ctx->hMutexShm);
 
-        for (int i = 0; i < ritmoAtual * 10 && *(args->pServidorEmExecucao); ++i) {
+        for (int i = 0; i < ritmoAtual * 10 && ctx->servidorEmExecucao; ++i) {
             Sleep(100);
         }
-        if (!*(args->pServidorEmExecucao)) break;
+        if (!ctx->servidorEmExecucao) break;
 
-
-        if (!*(args->pJogoRealmenteAtivo)) {
+        if (!ctx->jogoRealmenteAtivo) {
             continue;
         }
 
-        WaitForSingleObject(args->hMutexShm, INFINITE);
-        if (args->pDadosShm) {
-            int maxLetras = args->pDadosShm->numMaxLetrasAtual;
+        WaitForSingleObject(ctx->hMutexShm, INFINITE);
+        if (ctx->pDadosShm) {
+            int maxLetras = ctx->pDadosShm->numMaxLetrasAtual;
             int posParaNovaLetra = -1;
             int letrasAtuaisNoTabuleiro = 0;
 
             for (int i = 0; i < maxLetras; i++) {
-                if (args->pDadosShm->letrasVisiveis[i] != _T('_')) {
+                if (ctx->pDadosShm->letrasVisiveis[i] != _T('_')) {
                     letrasAtuaisNoTabuleiro++;
                 }
                 else if (posParaNovaLetra == -1) {
@@ -666,35 +653,36 @@ DWORD WINAPI ThreadGestorLetras(LPVOID param) {
                 indiceLetraAntiga = (indiceLetraAntiga + 1) % maxLetras;
             }
             else if (posParaNovaLetra == -1 && letrasAtuaisNoTabuleiro < maxLetras && maxLetras > 0) {
-                posParaNovaLetra = 0;
+                for (int i = 0; i < maxLetras; ++i) { if (ctx->pDadosShm->letrasVisiveis[i] == _T('_')) { posParaNovaLetra = i; break; } }
+                if (posParaNovaLetra == -1 && maxLetras > 0) posParaNovaLetra = 0;
             }
-
 
             if (posParaNovaLetra != -1 && maxLetras > 0) {
                 TCHAR novaLetra = _T('A') + (rand() % 26);
-                args->pDadosShm->letrasVisiveis[posParaNovaLetra] = novaLetra;
-                args->pDadosShm->generationCount++;
-                SetEvent(args->hEventoShmUpdate);
+                ctx->pDadosShm->letrasVisiveis[posParaNovaLetra] = novaLetra;
+                ctx->pDadosShm->generationCount++;
+                SetEvent(ctx->hEventoShmUpdate);
             }
         }
-        ReleaseMutex(args->hMutexShm);
+        ReleaseMutex(ctx->hMutexShm);
     }
-    Log(_T("[LETRAS] ThreadGestorLetras a terminar."));
+    Log(&ctx->csLog, _T("[LETRAS] ThreadGestorLetras a terminar."));
     return 0;
 }
 
 DWORD WINAPI ThreadAdminArbitro(LPVOID param) {
-    THREAD_ARGS_ARBITRO* args = (THREAD_ARGS_ARBITRO*)param;
+    THREAD_ARGS* args = (THREAD_ARGS*)param;
+    SERVER_CONTEXT* ctx = args->serverCtx;
     TCHAR comando[100];
     TCHAR usernameParam[MAX_USERNAME];
-    Log(_T("[ADMIN] ThreadAdminArbitro iniciada."));
+    Log(&ctx->csLog, _T("[ADMIN] ThreadAdminArbitro iniciada."));
 
-    while (*(args->pServidorEmExecucao)) {
-        Log(_T("Admin> "));
+    while (ctx->servidorEmExecucao) {
+        Log(&ctx->csLog, _T("Admin> "));
         if (_fgetts(comando, _countof(comando), stdin) == NULL) {
-            if (*(args->pServidorEmExecucao)) {
-                if (feof(stdin)) LogWarning(_T("[ADMIN] EOF no stdin. Encerrando thread admin."));
-                else LogError(_T("[ADMIN] Erro ao ler comando do admin."));
+            if (ctx->servidorEmExecucao) {
+                if (feof(stdin)) LogWarning(&ctx->csLog, _T("[ADMIN] EOF no stdin. Encerrando thread admin."));
+                else LogError(&ctx->csLog, _T("[ADMIN] Erro ao ler comando do admin."));
             }
             break;
         }
@@ -703,53 +691,53 @@ DWORD WINAPI ThreadAdminArbitro(LPVOID param) {
         if (_tcslen(comando) == 0) continue;
 
         if (_tcscmp(comando, _T("listar")) == 0) {
-            Log(_T("[ADMIN] Comando: listar"));
-            EnterCriticalSection(args->pcsListaJogadores);
-            Log(_T("--- Lista de Jogadores Ativos (%lu) ---"), *(args->pTotalJogadoresAtivos));
+            Log(&ctx->csLog, _T("[ADMIN] Comando: listar"));
+            EnterCriticalSection(&ctx->csListaJogadores);
+            Log(&ctx->csLog, _T("--- Lista de Jogadores Ativos (%lu) ---"), ctx->totalJogadoresAtivos);
             BOOL encontrouAlgum = FALSE;
             for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
-                if (args->jogadores[i].ativo) {
-                    Log(_T("  - %s (Pontos: %.1f, Pipe: %p)"), args->jogadores[i].username, args->jogadores[i].pontos, args->jogadores[i].hPipe);
+                if (ctx->listaJogadores[i].ativo) {
+                    Log(&ctx->csLog, _T("  - %s (Pontos: %.1f, Pipe: %p)"), ctx->listaJogadores[i].username, ctx->listaJogadores[i].pontos, ctx->listaJogadores[i].hPipe);
                     encontrouAlgum = TRUE;
                 }
             }
-            if (!encontrouAlgum) Log(_T("  (Nenhum jogador ativo no momento)"));
-            Log(_T("------------------------------------"));
-            LeaveCriticalSection(args->pcsListaJogadores);
+            if (!encontrouAlgum) Log(&ctx->csLog, _T("  (Nenhum jogador ativo no momento)"));
+            Log(&ctx->csLog, _T("------------------------------------"));
+            LeaveCriticalSection(&ctx->csListaJogadores);
         }
         else if (_tcsncmp(comando, _T("excluir "), 8) == 0) {
             ZeroMemory(usernameParam, sizeof(usernameParam));
             if (_stscanf_s(comando, _T("excluir %31s"), usernameParam, (unsigned)_countof(usernameParam) - 1) == 1) {
                 usernameParam[MAX_USERNAME - 1] = _T('\0');
-                Log(_T("[ADMIN] Comando: excluir %s"), usernameParam);
-                RemoverJogador(usernameParam, TRUE);
+                Log(&ctx->csLog, _T("[ADMIN] Comando: excluir %s"), usernameParam);
+                RemoverJogador(ctx, usernameParam, TRUE);
             }
             else {
-                LogWarning(_T("[ADMIN] Comando excluir mal formatado. Uso: excluir <username>"));
+                LogWarning(&ctx->csLog, _T("[ADMIN] Comando excluir mal formatado. Uso: excluir <username>"));
             }
         }
         else if (_tcscmp(comando, _T("acelerar")) == 0) {
-            WaitForSingleObject(args->hMutexShm, INFINITE);
-            if (*(args->pRitmoConfigSegundos) > 1) {
-                (*(args->pRitmoConfigSegundos))--;
-                Log(_T("[ADMIN] Ritmo alterado para %d segundos."), *(args->pRitmoConfigSegundos));
+            WaitForSingleObject(ctx->hMutexShm, INFINITE);
+            if (ctx->ritmoConfigSegundos > 1) {
+                (ctx->ritmoConfigSegundos)--;
+                Log(&ctx->csLog, _T("[ADMIN] Ritmo alterado para %d segundos."), ctx->ritmoConfigSegundos);
             }
             else {
-                Log(_T("[ADMIN] Ritmo já está no mínimo (1 segundo)."));
+                Log(&ctx->csLog, _T("[ADMIN] Ritmo já está no mínimo (1 segundo)."));
             }
-            ReleaseMutex(args->hMutexShm);
+            ReleaseMutex(ctx->hMutexShm);
         }
         else if (_tcscmp(comando, _T("travar")) == 0) {
-            WaitForSingleObject(args->hMutexShm, INFINITE);
-            (*(args->pRitmoConfigSegundos))++;
-            Log(_T("[ADMIN] Ritmo alterado para %d segundos."), *(args->pRitmoConfigSegundos));
-            ReleaseMutex(args->hMutexShm);
+            WaitForSingleObject(ctx->hMutexShm, INFINITE);
+            (ctx->ritmoConfigSegundos)++;
+            Log(&ctx->csLog, _T("[ADMIN] Ritmo alterado para %d segundos."), ctx->ritmoConfigSegundos);
+            ReleaseMutex(ctx->hMutexShm);
         }
         else if (_tcscmp(comando, _T("encerrar")) == 0) {
-            Log(_T("[ADMIN] Comando: encerrar. Servidor a terminar..."));
-            *(args->pServidorEmExecucao) = FALSE;
+            Log(&ctx->csLog, _T("[ADMIN] Comando: encerrar. Servidor a terminar..."));
+            ctx->servidorEmExecucao = FALSE;
 
-            if (args->hEventoShmUpdate) SetEvent(args->hEventoShmUpdate);
+            if (ctx->hEventoShmUpdate) SetEvent(ctx->hEventoShmUpdate);
 
             HANDLE hSelfConnect = CreateFile(PIPE_NAME, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
             if (hSelfConnect != INVALID_HANDLE_VALUE) {
@@ -758,17 +746,18 @@ DWORD WINAPI ThreadAdminArbitro(LPVOID param) {
             break;
         }
         else {
-            LogWarning(_T("[ADMIN] Comando desconhecido: '%s'"), comando);
+            LogWarning(&ctx->csLog, _T("[ADMIN] Comando desconhecido: '%s'"), comando);
         }
     }
-    Log(_T("[ADMIN] ThreadAdminArbitro a terminar."));
+    Log(&ctx->csLog, _T("[ADMIN] ThreadAdminArbitro a terminar."));
     return 0;
 }
 
-
 DWORD WINAPI ThreadClienteConectado(LPVOID param) {
-    THREAD_ARGS_ARBITRO* args = (THREAD_ARGS_ARBITRO*)param;
+    THREAD_ARGS* args = (THREAD_ARGS*)param;
+    SERVER_CONTEXT* ctx = args->serverCtx;
     HANDLE hPipe = args->hPipeCliente;
+
     MESSAGE msg;
     DWORD bytesLidos, bytesEscritos;
     JOGADOR_INFO_ARBITRO* meuJogadorInfo = NULL;
@@ -777,58 +766,60 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
     BOOL esteClienteAtivo = FALSE;
     int meuIndiceNaLista = -1;
 
-    Log(_T("[CLIENT_THREAD %p] Nova thread para cliente iniciada."), hPipe);
+    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Nova thread para cliente iniciada."), hPipe);
 
     OVERLAPPED olRead; ZeroMemory(&olRead, sizeof(OVERLAPPED));
     olRead.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-    if (olRead.hEvent == NULL) { LogError(_T("[CLIENT_THREAD %p] Falha ao criar evento de leitura."), hPipe); free(args); return 1; }
-
+    if (olRead.hEvent == NULL) {
+        LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Falha ao criar evento de leitura."), hPipe);
+        free(args);
+        return 1;
+    }
 
     if (ReadFile(hPipe, &msg, sizeof(MESSAGE), &bytesLidos, &olRead) || GetLastError() == ERROR_IO_PENDING) {
         if (GetLastError() == ERROR_IO_PENDING) {
             if (WaitForSingleObject(olRead.hEvent, IO_TIMEOUT) != WAIT_OBJECT_0) {
-                LogError(_T("[CLIENT_THREAD %p] Timeout/Erro JOIN ReadFile (%lu)."), hPipe, GetLastError());
+                LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Timeout/Erro JOIN ReadFile (%lu)."), hPipe, GetLastError());
                 goto cleanup_cliente_thread;
             }
             if (!GetOverlappedResult(hPipe, &olRead, &bytesLidos, FALSE)) {
-                LogError(_T("[CLIENT_THREAD %p] GetOverlappedResult JOIN falhou (%lu)."), hPipe, GetLastError());
+                LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] GetOverlappedResult JOIN falhou (%lu)."), hPipe, GetLastError());
                 goto cleanup_cliente_thread;
             }
         }
-
         if (bytesLidos == sizeof(MESSAGE) && _tcscmp(msg.type, _T("JOIN")) == 0) {
             StringCchCopy(usernameEsteCliente, MAX_USERNAME, msg.username);
-            Log(_T("[CLIENT_THREAD %p] Recebido JOIN de '%s'."), hPipe, usernameEsteCliente);
+            Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Recebido JOIN de '%s'."), hPipe, usernameEsteCliente);
 
-            EnterCriticalSection(args->pcsListaJogadores);
-            int idxExistente = EncontrarJogador(usernameEsteCliente);
+            EnterCriticalSection(&ctx->csListaJogadores);
+            int idxExistente = EncontrarJogador(ctx, usernameEsteCliente);
             if (idxExistente != -1) {
-                LeaveCriticalSection(args->pcsListaJogadores);
-                LogWarning(_T("[CLIENT_THREAD %p] Username '%s' já em uso."), hPipe, usernameEsteCliente);
+                LeaveCriticalSection(&ctx->csListaJogadores);
+                LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Username '%s' já em uso."), hPipe, usernameEsteCliente);
                 MESSAGE resp; ZeroMemory(&resp, sizeof(MESSAGE)); StringCchCopy(resp.type, _countof(resp.type), _T("JOIN_USER_EXISTS")); StringCchCopy(resp.data, _countof(resp.data), _T("Username em uso."));
                 WriteFile(hPipe, &resp, sizeof(MESSAGE), &bytesEscritos, NULL);
                 goto cleanup_cliente_thread;
             }
-            if (*(args->pTotalJogadoresAtivos) >= MAX_JOGADORES) {
-                LeaveCriticalSection(args->pcsListaJogadores);
-                LogWarning(_T("[CLIENT_THREAD %p] Jogo cheio. Rejeitando '%s'."), hPipe, usernameEsteCliente);
+            if (ctx->totalJogadoresAtivos >= MAX_JOGADORES) {
+                LeaveCriticalSection(&ctx->csListaJogadores);
+                LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Jogo cheio. Rejeitando '%s'."), hPipe, usernameEsteCliente);
                 MESSAGE resp; ZeroMemory(&resp, sizeof(MESSAGE)); StringCchCopy(resp.type, _countof(resp.type), _T("JOIN_GAME_FULL")); StringCchCopy(resp.data, _countof(resp.data), _T("Jogo cheio."));
                 WriteFile(hPipe, &resp, sizeof(MESSAGE), &bytesEscritos, NULL);
                 goto cleanup_cliente_thread;
             }
 
             for (int i = 0; i < MAX_JOGADORES; ++i) {
-                if (!args->jogadores[i].ativo) {
+                if (!ctx->listaJogadores[i].ativo) {
                     meuIndiceNaLista = i;
-                    meuJogadorInfo = &args->jogadores[i];
+                    meuJogadorInfo = &ctx->listaJogadores[i];
                     StringCchCopy(meuJogadorInfo->username, MAX_USERNAME, usernameEsteCliente);
                     meuJogadorInfo->pontos = 0.0f;
                     meuJogadorInfo->hPipe = hPipe;
                     meuJogadorInfo->ativo = TRUE;
                     meuJogadorInfo->dwThreadIdCliente = GetCurrentThreadId();
-                    (*(args->pTotalJogadoresAtivos))++;
+                    ctx->totalJogadoresAtivos++;
                     esteClienteAtivo = TRUE;
-                    Log(_T("[CLIENT_THREAD %p] Jogador '%s' adicionado (idx %d). Total: %lu"), hPipe, usernameEsteCliente, meuIndiceNaLista, *(args->pTotalJogadoresAtivos));
+                    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Jogador '%s' adicionado (idx %d). Total: %lu"), hPipe, usernameEsteCliente, meuIndiceNaLista, ctx->totalJogadoresAtivos);
 
                     MESSAGE respOK; ZeroMemory(&respOK, sizeof(MESSAGE)); StringCchCopy(respOK.type, _countof(respOK.type), _T("JOIN_OK"));
                     StringCchPrintf(respOK.data, _countof(respOK.data), _T("Bem-vindo, %s!"), usernameEsteCliente);
@@ -836,81 +827,93 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
 
                     MESSAGE notifJoin; ZeroMemory(&notifJoin, sizeof(MESSAGE)); StringCchCopy(notifJoin.type, _countof(notifJoin.type), _T("GAME_UPDATE"));
                     StringCchPrintf(notifJoin.data, _countof(notifJoin.data), _T("Jogador %s entrou no jogo."), usernameEsteCliente);
-                    NotificarTodosOsJogadores(&notifJoin, usernameEsteCliente);
+                    NotificarTodosOsJogadores(ctx, &notifJoin, usernameEsteCliente);
 
-                    VerificarEstadoJogo();
+                    VerificarEstadoJogo(ctx);
                     break;
                 }
             }
-            LeaveCriticalSection(args->pcsListaJogadores);
-            if (!esteClienteAtivo) { LogError(_T("[CLIENT_THREAD %p] Falha ao adicionar '%s'."), hPipe, usernameEsteCliente); goto cleanup_cliente_thread; }
+            LeaveCriticalSection(&ctx->csListaJogadores);
+            if (!esteClienteAtivo) {
+                LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Falha ao adicionar '%s' (sem slot?)."), hPipe, usernameEsteCliente);
+                goto cleanup_cliente_thread;
+            }
         }
-        else { LogError(_T("[CLIENT_THREAD %p] Primeira msg não foi JOIN ou bytes errados. Desconectando."), hPipe); goto cleanup_cliente_thread; }
+        else {
+            LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Primeira msg não foi JOIN ou bytes errados. Desconectando."), hPipe);
+            goto cleanup_cliente_thread;
+        }
     }
-    else { LogError(_T("[CLIENT_THREAD %p] Falha ao ler 1ª msg: %lu."), hPipe, GetLastError()); goto cleanup_cliente_thread; }
+    else {
+        LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Falha ao ler 1ª msg: %lu."), hPipe, GetLastError());
+        goto cleanup_cliente_thread;
+    }
 
-    while (*(args->pServidorEmExecucao) && esteClienteAtivo) {
+    while (ctx->servidorEmExecucao && esteClienteAtivo) {
         ResetEvent(olRead.hEvent);
         BOOL sucessoLeitura = ReadFile(hPipe, &msg, sizeof(MESSAGE), &bytesLidos, &olRead);
         DWORD dwErrorRead = GetLastError();
 
         if (!sucessoLeitura && dwErrorRead == ERROR_IO_PENDING) {
-            DWORD waitRes = WaitForSingleObject(olRead.hEvent, READ_TIMEOUT_THREAD_JOGADOR);
+            HANDLE handles[1];
+            handles[0] = olRead.hEvent;
+
+            DWORD waitRes = WaitForMultipleObjects(1, handles, FALSE, READ_TIMEOUT_THREAD_JOGADOR);
             if (waitRes == WAIT_TIMEOUT) {
-                if (!*(args->pServidorEmExecucao)) break;
+                if (!ctx->servidorEmExecucao) break;
                 continue;
             }
             else if (waitRes != WAIT_OBJECT_0) {
-                LogError(_T("[CLIENT_THREAD %p] Erro %lu ao esperar ReadFile para '%s'."), hPipe, GetLastError(), usernameEsteCliente);
+                LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Erro %lu ao esperar ReadFile para '%s'."), hPipe, GetLastError(), usernameEsteCliente);
                 esteClienteAtivo = FALSE; break;
             }
             if (!GetOverlappedResult(hPipe, &olRead, &bytesLidos, FALSE)) {
-                LogError(_T("[CLIENT_THREAD %p] GOR falhou após ReadFile para '%s': %lu."), hPipe, usernameEsteCliente, GetLastError());
+                LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] GOR falhou após ReadFile para '%s': %lu."), hPipe, usernameEsteCliente, GetLastError());
                 esteClienteAtivo = FALSE; break;
             }
             sucessoLeitura = TRUE;
         }
         else if (!sucessoLeitura) {
-            if (*(args->pServidorEmExecucao)) LogError(_T("[CLIENT_THREAD %p] ReadFile falhou para '%s': %lu."), hPipe, usernameEsteCliente, dwErrorRead);
+            if (ctx->servidorEmExecucao) LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] ReadFile falhou para '%s': %lu."), hPipe, usernameEsteCliente, dwErrorRead);
             esteClienteAtivo = FALSE; break;
         }
 
-        if (!g_servidorEmExecucao) break;
+        if (!ctx->servidorEmExecucao) break;
 
         if (sucessoLeitura && bytesLidos == sizeof(MESSAGE)) {
-            EnterCriticalSection(args->pcsListaJogadores);
-            if (meuIndiceNaLista == -1 ||
-                meuIndiceNaLista >= MAX_JOGADORES ||
-                !args->jogadores[meuIndiceNaLista].ativo ||
-                args->jogadores[meuIndiceNaLista].hPipe != hPipe) {
-                LeaveCriticalSection(args->pcsListaJogadores);
-                LogWarning(_T("[CLIENT_THREAD %p] Jogador '%s' tornou-se inválido. Encerrando."), hPipe, usernameEsteCliente);
+            EnterCriticalSection(&ctx->csListaJogadores);
+            if (meuIndiceNaLista == -1 || meuIndiceNaLista >= MAX_JOGADORES ||
+                !ctx->listaJogadores[meuIndiceNaLista].ativo ||
+                ctx->listaJogadores[meuIndiceNaLista].hPipe != hPipe) {
+                LeaveCriticalSection(&ctx->csListaJogadores);
+                LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Jogador '%s' tornou-se inválido ou pipe desatualizado. Encerrando."), hPipe, usernameEsteCliente);
                 esteClienteAtivo = FALSE; break;
             }
-            meuJogadorInfo = &args->jogadores[meuIndiceNaLista];
-            LeaveCriticalSection(args->pcsListaJogadores);
-
+            meuJogadorInfo = &ctx->listaJogadores[meuIndiceNaLista];
+            LeaveCriticalSection(&ctx->csListaJogadores);
 
             if (_tcscmp(msg.type, _T("WORD")) == 0) {
-                Log(_T("[CLIENT_THREAD %p] '%s' submeteu: '%s'"), hPipe, usernameEsteCliente, msg.data);
-                ValidarPalavraJogo(msg.data, usernameEsteCliente, args);
+                Log(&ctx->csLog, _T("[CLIENT_THREAD %p] '%s' submeteu: '%s'"), hPipe, usernameEsteCliente, msg.data);
+                ValidarPalavraJogo(args, msg.data, usernameEsteCliente);
             }
             else if (_tcscmp(msg.type, _T("GET_SCORE")) == 0) {
                 MESSAGE respScore; ZeroMemory(&respScore, sizeof(MESSAGE));
                 StringCchCopy(respScore.type, _countof(respScore.type), _T("SCORE_UPDATE"));
-                EnterCriticalSection(args->pcsListaJogadores);
-                if (meuJogadorInfo && meuJogadorInfo->ativo) {
+                EnterCriticalSection(&ctx->csListaJogadores);
+                if (meuJogadorInfo && meuJogadorInfo->ativo && meuJogadorInfo->hPipe == hPipe) {
                     StringCchPrintf(respScore.data, _countof(respScore.data), _T("%.1f"), meuJogadorInfo->pontos);
                     respScore.pontos = (int)meuJogadorInfo->pontos;
                 }
-                else { StringCchCopy(respScore.data, _countof(respScore.data), _T("Erro.")); respScore.pontos = 0; }
-                LeaveCriticalSection(args->pcsListaJogadores);
+                else {
+                    StringCchCopy(respScore.data, _countof(respScore.data), _T("Erro/Inativo"));
+                    respScore.pontos = 0;
+                }
+                LeaveCriticalSection(&ctx->csListaJogadores);
                 WriteFile(hPipe, &respScore, sizeof(MESSAGE), &bytesEscritos, NULL);
             }
             else if (_tcscmp(msg.type, _T("GET_JOGS")) == 0) {
                 MESSAGE respJogs; ZeroMemory(&respJogs, sizeof(MESSAGE));
                 StringCchCopy(respJogs.type, _countof(respJogs.type), _T("PLAYER_LIST_UPDATE"));
-
                 TCHAR listaBuffer[sizeof(respJogs.data)];
                 listaBuffer[0] = _T('\0');
                 size_t bufferRestante = _countof(listaBuffer);
@@ -920,91 +923,93 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
                 StringCchCat(pBufferAtual, bufferRestante, _T("Jogadores Ativos:\n"));
                 (void)StringCchLength(pBufferAtual, bufferRestante, &cchLinhaEscrita); pBufferAtual += cchLinhaEscrita; bufferRestante -= cchLinhaEscrita;
 
-                EnterCriticalSection(args->pcsListaJogadores);
+                EnterCriticalSection(&ctx->csListaJogadores);
                 for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
-                    if (args->jogadores[i].ativo && bufferRestante > 1) {
+                    if (ctx->listaJogadores[i].ativo && bufferRestante > 1) {
                         TCHAR linhaJogador[100];
                         StringCchPrintf(linhaJogador, _countof(linhaJogador), _T(" - %s (%.1f pts)\n"),
-                            args->jogadores[i].username, args->jogadores[i].pontos);
-
+                            ctx->listaJogadores[i].username, ctx->listaJogadores[i].pontos);
                         StringCchCat(pBufferAtual, bufferRestante, linhaJogador);
                         (void)StringCchLength(pBufferAtual, bufferRestante, &cchLinhaEscrita); pBufferAtual += cchLinhaEscrita; bufferRestante -= cchLinhaEscrita;
                     }
                 }
-                LeaveCriticalSection(args->pcsListaJogadores);
+                LeaveCriticalSection(&ctx->csListaJogadores);
                 StringCchCopy(respJogs.data, _countof(respJogs.data), listaBuffer);
                 WriteFile(hPipe, &respJogs, sizeof(MESSAGE), &bytesEscritos, NULL);
+
             }
             else if (_tcscmp(msg.type, _T("EXIT")) == 0) {
-                Log(_T("[CLIENT_THREAD %p] '%s' solicitou sair."), hPipe, usernameEsteCliente);
+                Log(&ctx->csLog, _T("[CLIENT_THREAD %p] '%s' solicitou sair."), hPipe, usernameEsteCliente);
                 esteClienteAtivo = FALSE;
                 break;
             }
-            else { LogWarning(_T("[CLIENT_THREAD %p] '%s' enviou msg desconhecida: '%s'"), hPipe, usernameEsteCliente, msg.type); }
+            else {
+                LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] '%s' enviou msg desconhecida: '%s'"), hPipe, usernameEsteCliente, msg.type);
+            }
         }
         else if (!sucessoLeitura) {
-            if (*(args->pServidorEmExecucao)) LogError(_T("[CLIENT_THREAD %p] Erro final ReadFile para '%s': %lu."), hPipe, usernameEsteCliente, GetLastError());
             esteClienteAtivo = FALSE; break;
         }
         else if (bytesLidos == 0 && sucessoLeitura) {
-            if (*(args->pServidorEmExecucao)) Log(_T("[CLIENT_THREAD %p] Cliente '%s' desconectou (EOF)."), hPipe, usernameEsteCliente);
+            if (ctx->servidorEmExecucao) Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Cliente '%s' desconectou (EOF)."), hPipe, usernameEsteCliente);
             esteClienteAtivo = FALSE; break;
         }
         else if (bytesLidos != 0) {
-            if (*(args->pServidorEmExecucao)) LogError(_T("[CLIENT_THREAD %p] Erro de framing para '%s'. Bytes: %lu."), hPipe, usernameEsteCliente, bytesLidos);
+            if (ctx->servidorEmExecucao) LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Erro de framing para '%s'. Bytes: %lu."), hPipe, usernameEsteCliente, bytesLidos);
             esteClienteAtivo = FALSE; break;
         }
     }
 
 cleanup_cliente_thread:
-    Log(_T("[CLIENT_THREAD %p] Limpando para '%s'..."), hPipe, usernameEsteCliente[0] ? usernameEsteCliente : _T("Desconhecido"));
+    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Limpando para '%s'..."), hPipe, usernameEsteCliente[0] ? usernameEsteCliente : _T("Desconhecido"));
     if (usernameEsteCliente[0] != _T('\0')) {
-        RemoverJogador(usernameEsteCliente, FALSE);
+        RemoverJogador(ctx, usernameEsteCliente, FALSE);
     }
     else if (meuIndiceNaLista != -1) {
-        EnterCriticalSection(args->pcsListaJogadores);
+        EnterCriticalSection(&ctx->csListaJogadores);
         if (meuIndiceNaLista >= 0 && meuIndiceNaLista < MAX_JOGADORES &&
-            args->jogadores[meuIndiceNaLista].ativo &&
-            args->jogadores[meuIndiceNaLista].hPipe == hPipe) {
-            args->jogadores[meuIndiceNaLista].ativo = FALSE;
-            args->jogadores[meuIndiceNaLista].hPipe = INVALID_HANDLE_VALUE;
-            (*(args->pTotalJogadoresAtivos))--;
-            LogWarning(_T("[CLIENT_THREAD %p] Jogador parcialmente adicionado (idx %d) limpo."), hPipe, meuIndiceNaLista);
-            VerificarEstadoJogo();
+            ctx->listaJogadores[meuIndiceNaLista].ativo &&
+            ctx->listaJogadores[meuIndiceNaLista].hPipe == hPipe) {
+            ctx->listaJogadores[meuIndiceNaLista].ativo = FALSE;
+            ctx->listaJogadores[meuIndiceNaLista].hPipe = INVALID_HANDLE_VALUE;
+            if (ctx->totalJogadoresAtivos > 0) ctx->totalJogadoresAtivos--;
+            LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Jogador parcialmente adicionado (idx %d) limpo."), hPipe, meuIndiceNaLista);
+            VerificarEstadoJogo(ctx);
         }
-        LeaveCriticalSection(args->pcsListaJogadores);
+        LeaveCriticalSection(&ctx->csListaJogadores);
     }
 
     if (olRead.hEvent) CloseHandle(olRead.hEvent);
 
-    if (hPipe != INVALID_HANDLE_VALUE) { DisconnectNamedPipe(hPipe); CloseHandle(hPipe); }
+    if (hPipe != INVALID_HANDLE_VALUE) {
+        DisconnectNamedPipe(hPipe);
+        CloseHandle(hPipe);
+    }
     if (args != NULL) free(args);
-    Log(_T("[CLIENT_THREAD %p] Thread para '%s' terminada."), hPipe, usernameEsteCliente[0] ? usernameEsteCliente : _T("Desconhecido"));
+
+    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Thread para '%s' terminada."), hPipe, usernameEsteCliente[0] ? usernameEsteCliente : _T("Desconhecido"));
     return 0;
 }
 
-
-// Funções de gestão de jogadores e jogo 
-
-void RemoverJogador(const TCHAR* username, BOOL notificarClienteParaSair) {
-    Log(_T("[JOGADOR] Tentando remover '%s'..."), username);
+void RemoverJogador(SERVER_CONTEXT* ctx, const TCHAR* username, BOOL notificarClienteParaSair) {
+    Log(&ctx->csLog, _T("[JOGADOR] Tentando remover '%s'..."), username);
     int idxRemovido = -1;
     HANDLE hPipeDoRemovido = INVALID_HANDLE_VALUE;
 
-    EnterCriticalSection(&g_csListaJogadores);
+    EnterCriticalSection(&ctx->csListaJogadores);
     for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
-        if (g_listaJogadores[i].ativo && _tcscmp(g_listaJogadores[i].username, username) == 0) {
-            Log(_T("[JOGADOR] '%s' (idx %lu) encontrado para remoção."), username, i);
-            g_listaJogadores[i].ativo = FALSE;
-            hPipeDoRemovido = g_listaJogadores[i].hPipe;
-            g_listaJogadores[i].hPipe = INVALID_HANDLE_VALUE;
-            if (g_totalJogadoresAtivos > 0) g_totalJogadoresAtivos--;
+        if (ctx->listaJogadores[i].ativo && _tcscmp(ctx->listaJogadores[i].username, username) == 0) {
+            Log(&ctx->csLog, _T("[JOGADOR] '%s' (idx %lu) encontrado para remoção."), username, i);
+            ctx->listaJogadores[i].ativo = FALSE;
+            hPipeDoRemovido = ctx->listaJogadores[i].hPipe;
+            ctx->listaJogadores[i].hPipe = INVALID_HANDLE_VALUE;
+            if (ctx->totalJogadoresAtivos > 0) ctx->totalJogadoresAtivos--;
             idxRemovido = (int)i;
-            Log(_T("[JOGADOR] '%s' removido. Total ativos: %lu"), username, g_totalJogadoresAtivos);
+            Log(&ctx->csLog, _T("[JOGADOR] '%s' removido. Total ativos: %lu"), username, ctx->totalJogadoresAtivos);
             break;
         }
     }
-    LeaveCriticalSection(&g_csListaJogadores);
+    LeaveCriticalSection(&ctx->csListaJogadores);
 
     if (idxRemovido != -1) {
         if (notificarClienteParaSair && hPipeDoRemovido != INVALID_HANDLE_VALUE) {
@@ -1018,31 +1023,34 @@ void RemoverJogador(const TCHAR* username, BOOL notificarClienteParaSair) {
         MESSAGE msgNotificacaoSaida; ZeroMemory(&msgNotificacaoSaida, sizeof(MESSAGE));
         StringCchCopy(msgNotificacaoSaida.type, _countof(msgNotificacaoSaida.type), _T("GAME_UPDATE"));
         StringCchPrintf(msgNotificacaoSaida.data, _countof(msgNotificacaoSaida.data), _T("Jogador %s saiu do jogo."), username);
-        NotificarTodosOsJogadores(&msgNotificacaoSaida, username);
-        VerificarEstadoJogo();
+        NotificarTodosOsJogadores(ctx, &msgNotificacaoSaida, username);
+
+        VerificarEstadoJogo(ctx);
     }
     else {
-        LogWarning(_T("[JOGADOR] '%s' não encontrado para remoção ou já inativo."), username);
+        LogWarning(&ctx->csLog, _T("[JOGADOR] '%s' não encontrado para remoção ou já inativo."), username);
     }
 }
 
-
-int EncontrarJogador(const TCHAR* username) {
-    // Assume que g_csListaJogadores JÁ ESTÁ DETIDO pelo chamador
+int EncontrarJogador(SERVER_CONTEXT* ctx, const TCHAR* username) {
+    // Assume que ctx->csListaJogadores JÁ ESTÁ DETIDO pelo chamador (como indicado no protótipo original)
     for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
-        if (g_listaJogadores[i].ativo && _tcscmp(g_listaJogadores[i].username, username) == 0) {
+        if (ctx->listaJogadores[i].ativo && _tcscmp(ctx->listaJogadores[i].username, username) == 0) {
             return (int)i;
         }
     }
     return -1;
 }
 
-BOOL ValidarPalavraJogo(const TCHAR* palavraSubmetida, const TCHAR* usernameJogador, THREAD_ARGS_ARBITRO* argsClienteThread) {
+BOOL ValidarPalavraJogo(THREAD_ARGS* argsClienteThread, const TCHAR* palavraSubmetida, const TCHAR* usernameJogador) {
+    SERVER_CONTEXT* ctx = argsClienteThread->serverCtx;
+    HANDLE hPipeCliente = argsClienteThread->hPipeCliente;
+
     MESSAGE resposta; ZeroMemory(&resposta, sizeof(MESSAGE));
     StringCchCopy(resposta.username, _countof(resposta.username), usernameJogador);
     float pontosAlterados = 0.0f;
 
-    if (!*(argsClienteThread->pJogoRealmenteAtivo)) {
+    if (!ctx->jogoRealmenteAtivo) {
         StringCchCopy(resposta.type, _countof(resposta.type), _T("WORD_INVALID"));
         StringCchCopy(resposta.data, _countof(resposta.data), _T("O jogo não está ativo."));
     }
@@ -1052,14 +1060,14 @@ BOOL ValidarPalavraJogo(const TCHAR* palavraSubmetida, const TCHAR* usernameJoga
         _tcsupr_s(palavraUpper, MAX_WORD);
 
         BOOL existeNoDicionario = FALSE;
-        EnterCriticalSection(&(argsClienteThread->pDicionario->csDicionario));
-        for (DWORD i = 0; i < argsClienteThread->pDicionario->totalPalavras; ++i) {
-            if (_tcscmp(argsClienteThread->pDicionario->palavras[i], palavraUpper) == 0) {
+        EnterCriticalSection(&ctx->dicionario.csDicionario);
+        for (DWORD i = 0; i < ctx->dicionario.totalPalavras; ++i) {
+            if (_tcscmp(ctx->dicionario.palavras[i], palavraUpper) == 0) {
                 existeNoDicionario = TRUE;
                 break;
             }
         }
-        LeaveCriticalSection(&(argsClienteThread->pDicionario->csDicionario));
+        LeaveCriticalSection(&ctx->dicionario.csDicionario);
 
         if (!existeNoDicionario) {
             StringCchCopy(resposta.type, _countof(resposta.type), _T("WORD_INVALID"));
@@ -1067,168 +1075,171 @@ BOOL ValidarPalavraJogo(const TCHAR* palavraSubmetida, const TCHAR* usernameJoga
             pontosAlterados = -((float)_tcslen(palavraSubmetida) * 0.5f);
         }
         else {
-            WaitForSingleObject(argsClienteThread->hMutexShm, INFINITE);
+            WaitForSingleObject(ctx->hMutexShm, INFINITE);
             BOOL podeFormar = TRUE;
             TCHAR letrasDisponiveisCopia[MAX_LETRAS_TABULEIRO];
-            for (int k = 0; k < argsClienteThread->pDadosShm->numMaxLetrasAtual; ++k) letrasDisponiveisCopia[k] = argsClienteThread->pDadosShm->letrasVisiveis[k];
+            for (int k = 0; k < ctx->pDadosShm->numMaxLetrasAtual; ++k) {
+                letrasDisponiveisCopia[k] = ctx->pDadosShm->letrasVisiveis[k];
+            }
 
             size_t lenPalavra = _tcslen(palavraUpper);
+            if (lenPalavra == 0) podeFormar = FALSE;
+
             for (size_t k = 0; k < lenPalavra; ++k) {
                 BOOL encontrouLetra = FALSE;
-                for (int m = 0; m < argsClienteThread->pDadosShm->numMaxLetrasAtual; ++m) {
+                for (int m = 0; m < ctx->pDadosShm->numMaxLetrasAtual; ++m) {
                     if (letrasDisponiveisCopia[m] == palavraUpper[k]) {
                         letrasDisponiveisCopia[m] = _T(' ');
                         encontrouLetra = TRUE;
                         break;
                     }
                 }
-                if (!encontrouLetra) { podeFormar = FALSE; break; }
+                if (!encontrouLetra) {
+                    podeFormar = FALSE;
+                    break;
+                }
             }
 
             if (podeFormar) {
                 StringCchCopy(resposta.type, _countof(resposta.type), _T("WORD_VALID"));
-                pontosAlterados = (float)_tcslen(palavraSubmetida);
+                pontosAlterados = (float)lenPalavra;
                 StringCchPrintf(resposta.data, _countof(resposta.data), _T("'%s' válida! +%.1f pts."), palavraSubmetida, pontosAlterados);
 
                 for (size_t k = 0; k < lenPalavra; ++k) {
-                    for (int m = 0; m < argsClienteThread->pDadosShm->numMaxLetrasAtual; ++m) {
-                        if (argsClienteThread->pDadosShm->letrasVisiveis[m] == palavraUpper[k]) {
-                            argsClienteThread->pDadosShm->letrasVisiveis[m] = _T('_');
+                    for (int m = 0; m < ctx->pDadosShm->numMaxLetrasAtual; ++m) {
+                        if (ctx->pDadosShm->letrasVisiveis[m] == palavraUpper[k]) {
+                            ctx->pDadosShm->letrasVisiveis[m] = _T('_');
                             break;
                         }
                     }
                 }
-                argsClienteThread->pDadosShm->generationCount++;
-                StringCchCopy(argsClienteThread->pDadosShm->ultimaPalavraIdentificada, MAX_WORD, palavraSubmetida);
-                StringCchCopy(argsClienteThread->pDadosShm->usernameUltimaPalavra, MAX_USERNAME, usernameJogador);
-                argsClienteThread->pDadosShm->pontuacaoUltimaPalavra = (int)pontosAlterados;
-                SetEvent(argsClienteThread->hEventoShmUpdate);
-
-                EnterCriticalSection(argsClienteThread->pcsListaJogadores);
-                int idxJogador = EncontrarJogador(usernameJogador);
-                if (idxJogador != -1) {
-                    argsClienteThread->jogadores[idxJogador].pontos += pontosAlterados;
-                    Log(_T("[JOGO] %s acertou! Pts: %.1f"), usernameJogador, argsClienteThread->jogadores[idxJogador].pontos);
-                }
-                LeaveCriticalSection(argsClienteThread->pcsListaJogadores);
+                ctx->pDadosShm->generationCount++;
+                StringCchCopy(ctx->pDadosShm->ultimaPalavraIdentificada, MAX_WORD, palavraSubmetida);
+                StringCchCopy(ctx->pDadosShm->usernameUltimaPalavra, MAX_USERNAME, usernameJogador);
+                ctx->pDadosShm->pontuacaoUltimaPalavra = (int)pontosAlterados;
+                SetEvent(ctx->hEventoShmUpdate);
 
                 MESSAGE notifPalavra; ZeroMemory(&notifPalavra, sizeof(MESSAGE));
                 StringCchCopy(notifPalavra.type, _countof(notifPalavra.type), _T("GAME_UPDATE"));
                 StringCchPrintf(notifPalavra.data, _countof(notifPalavra.data), _T("%s acertou '%s' (+%.1f pts)!"), usernameJogador, palavraSubmetida, pontosAlterados);
-                NotificarTodosOsJogadores(&notifPalavra, NULL);
+                NotificarTodosOsJogadores(ctx, &notifPalavra, NULL);
+
             }
             else {
                 StringCchCopy(resposta.type, _countof(resposta.type), _T("WORD_INVALID"));
-                StringCchPrintf(resposta.data, _countof(resposta.data), _T("'%s' não pode ser formada."), palavraSubmetida);
-                pontosAlterados = -((float)_tcslen(palavraSubmetida) * 0.5f);
+                StringCchPrintf(resposta.data, _countof(resposta.data), _T("'%s' não pode ser formada com as letras atuais."), palavraSubmetida);
+                pontosAlterados = -((float)lenPalavra * 0.5f);
             }
-            ReleaseMutex(argsClienteThread->hMutexShm);
+            ReleaseMutex(ctx->hMutexShm);
         }
     }
     resposta.pontos = (int)pontosAlterados;
 
-    if (pontosAlterados < 0) {
-        EnterCriticalSection(argsClienteThread->pcsListaJogadores);
-        int idxJogador = EncontrarJogador(usernameJogador);
+    if (pontosAlterados != 0.0f) {
+        EnterCriticalSection(&ctx->csListaJogadores);
+        int idxJogador = EncontrarJogador(ctx, usernameJogador); // Assume csListaJogadores já detido
         if (idxJogador != -1) {
-            argsClienteThread->jogadores[idxJogador].pontos += pontosAlterados;
-            Log(_T("[JOGO] %s errou. Pts: %.1f"), usernameJogador, argsClienteThread->jogadores[idxJogador].pontos);
+            ctx->listaJogadores[idxJogador].pontos += pontosAlterados;
+            Log(&ctx->csLog, _T("[JOGO] %s (%s): %+.1f pts. Total: %.1f"), usernameJogador,
+                (_tcscmp(resposta.type, _T("WORD_VALID")) == 0 ? _T("acertou") : _T("errou/inválida")),
+                pontosAlterados, ctx->listaJogadores[idxJogador].pontos);
         }
-        LeaveCriticalSection(argsClienteThread->pcsListaJogadores);
+        LeaveCriticalSection(&ctx->csListaJogadores);
     }
 
     DWORD bytesEscritos;
-    WriteFile(argsClienteThread->hPipeCliente, &resposta, sizeof(MESSAGE), &bytesEscritos, NULL);
+    WriteFile(hPipeCliente, &resposta, sizeof(MESSAGE), &bytesEscritos, NULL);
     return (_tcscmp(resposta.type, _T("WORD_VALID")) == 0);
 }
 
-void VerificarEstadoJogo() {
-    EnterCriticalSection(&g_csListaJogadores);
-    BOOL deveEstarAtivo = (g_totalJogadoresAtivos >= 2);
-    LeaveCriticalSection(&g_csListaJogadores);
+void VerificarEstadoJogo(SERVER_CONTEXT* ctx) {
+    EnterCriticalSection(&ctx->csListaJogadores);
+    BOOL deveEstarAtivo = (ctx->totalJogadoresAtivos >= MIN_JOGADORES_PARA_INICIAR);
+    DWORD totalJogadoresAtivosSnapshot = ctx->totalJogadoresAtivos; // Para log fora da CS
+    LeaveCriticalSection(&ctx->csListaJogadores);
 
-    WaitForSingleObject(g_hMutexShm, INFINITE);
-    BOOL estavaAtivo = g_pDadosShm->jogoAtivo;
+    WaitForSingleObject(ctx->hMutexShm, INFINITE);
+    BOOL estavaAtivo = ctx->pDadosShm->jogoAtivo;
 
     if (deveEstarAtivo && !estavaAtivo) {
-        g_pDadosShm->jogoAtivo = TRUE;
-        g_jogoRealmenteAtivo = TRUE;
-        Log(_T("[JOGO] O jogo começou/recomeçou! (%lu jogadores)"), g_totalJogadoresAtivos);
-        for (int i = 0; i < g_pDadosShm->numMaxLetrasAtual; ++i) g_pDadosShm->letrasVisiveis[i] = _T('_');
-        StringCchCopy(g_pDadosShm->ultimaPalavraIdentificada, MAX_WORD, _T(""));
-        StringCchCopy(g_pDadosShm->usernameUltimaPalavra, MAX_USERNAME, _T(""));
-        g_pDadosShm->pontuacaoUltimaPalavra = 0;
-        g_pDadosShm->generationCount++;
-        SetEvent(g_hEventoShmUpdate);
-        ReleaseMutex(g_hMutexShm);
+        ctx->pDadosShm->jogoAtivo = TRUE;
+        ctx->jogoRealmenteAtivo = TRUE;
+        Log(&ctx->csLog, _T("[JOGO] O jogo começou/recomeçou! (%lu jogadores)"), totalJogadoresAtivosSnapshot);
+        for (int i = 0; i < ctx->pDadosShm->numMaxLetrasAtual; ++i) ctx->pDadosShm->letrasVisiveis[i] = _T('_');
+        StringCchCopy(ctx->pDadosShm->ultimaPalavraIdentificada, MAX_WORD, _T(""));
+        StringCchCopy(ctx->pDadosShm->usernameUltimaPalavra, MAX_USERNAME, _T(""));
+        ctx->pDadosShm->pontuacaoUltimaPalavra = 0;
+        ctx->pDadosShm->generationCount++;
+        SetEvent(ctx->hEventoShmUpdate);
+        ReleaseMutex(ctx->hMutexShm);
 
         MESSAGE msgJogoIniciou; ZeroMemory(&msgJogoIniciou, sizeof(MESSAGE));
         StringCchCopy(msgJogoIniciou.type, _countof(msgJogoIniciou.type), _T("GAME_UPDATE"));
         StringCchCopy(msgJogoIniciou.data, _countof(msgJogoIniciou.data), _T("O jogo começou! Boa sorte!"));
-        NotificarTodosOsJogadores(&msgJogoIniciou, NULL);
+        NotificarTodosOsJogadores(ctx, &msgJogoIniciou, NULL);
+
     }
     else if (!deveEstarAtivo && estavaAtivo) {
-        g_pDadosShm->jogoAtivo = FALSE;
-        g_jogoRealmenteAtivo = FALSE;
-        Log(_T("[JOGO] Jogo parado. Menos de 2 jogadores. (%lu jogadores)"), g_totalJogadoresAtivos);
-        for (int i = 0; i < g_pDadosShm->numMaxLetrasAtual; ++i) g_pDadosShm->letrasVisiveis[i] = _T('_');
-        StringCchCopy(g_pDadosShm->ultimaPalavraIdentificada, MAX_WORD, _T(""));
-        StringCchCopy(g_pDadosShm->usernameUltimaPalavra, MAX_USERNAME, _T(""));
-        g_pDadosShm->pontuacaoUltimaPalavra = 0;
-        g_pDadosShm->generationCount++;
-        SetEvent(g_hEventoShmUpdate);
-        ReleaseMutex(g_hMutexShm);
+        ctx->pDadosShm->jogoAtivo = FALSE;
+        ctx->jogoRealmenteAtivo = FALSE;
+        Log(&ctx->csLog, _T("[JOGO] Jogo parado. Menos de %d jogadores. (%lu jogadores)"), MIN_JOGADORES_PARA_INICIAR, totalJogadoresAtivosSnapshot);
+        for (int i = 0; i < ctx->pDadosShm->numMaxLetrasAtual; ++i) ctx->pDadosShm->letrasVisiveis[i] = _T('_');
+        StringCchCopy(ctx->pDadosShm->ultimaPalavraIdentificada, MAX_WORD, _T(""));
+        StringCchCopy(ctx->pDadosShm->usernameUltimaPalavra, MAX_USERNAME, _T(""));
+        ctx->pDadosShm->pontuacaoUltimaPalavra = 0;
+        ctx->pDadosShm->generationCount++;
+        SetEvent(ctx->hEventoShmUpdate);
+        ReleaseMutex(ctx->hMutexShm);
 
         MESSAGE msgJogoParou; ZeroMemory(&msgJogoParou, sizeof(MESSAGE));
         StringCchCopy(msgJogoParou.type, _countof(msgJogoParou.type), _T("GAME_UPDATE"));
         StringCchCopy(msgJogoParou.data, _countof(msgJogoParou.data), _T("Jogo parado. Aguardando mais jogadores..."));
-        NotificarTodosOsJogadores(&msgJogoParou, NULL);
+        NotificarTodosOsJogadores(ctx, &msgJogoParou, NULL);
     }
     else {
-        ReleaseMutex(g_hMutexShm);
+        ReleaseMutex(ctx->hMutexShm);
     }
 }
 
-// Definição da função NotificarTodosOsJogadores
-void NotificarTodosOsJogadores(const MESSAGE* msgAEnviar, const TCHAR* skipUsername) {
-    EnterCriticalSection(&g_csListaJogadores);
+void NotificarTodosOsJogadores(SERVER_CONTEXT* ctx, const MESSAGE* msgAEnviar, const TCHAR* skipUsername) {
+    EnterCriticalSection(&ctx->csListaJogadores);
     for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
-        if (g_listaJogadores[i].ativo && g_listaJogadores[i].hPipe != INVALID_HANDLE_VALUE) {
-            if (skipUsername == NULL || _tcscmp(g_listaJogadores[i].username, skipUsername) != 0) {
+        if (ctx->listaJogadores[i].ativo && ctx->listaJogadores[i].hPipe != INVALID_HANDLE_VALUE) {
+            if (skipUsername == NULL || _tcscmp(ctx->listaJogadores[i].username, skipUsername) != 0) {
                 DWORD bytesEscritos;
                 OVERLAPPED olNotify; ZeroMemory(&olNotify, sizeof(OVERLAPPED));
                 olNotify.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
                 if (olNotify.hEvent == NULL) {
-                    LogError(_T("[NOTIFICAR] Falha ao criar evento para notificação para %s."), g_listaJogadores[i].username);
+                    LogError(&ctx->csLog, _T("[NOTIFICAR] Falha ao criar evento para notificação para %s."), ctx->listaJogadores[i].username);
                     continue;
                 }
 
-                if (!WriteFile(g_listaJogadores[i].hPipe, msgAEnviar, sizeof(MESSAGE), &bytesEscritos, &olNotify)) {
+                if (!WriteFile(ctx->listaJogadores[i].hPipe, msgAEnviar, sizeof(MESSAGE), &bytesEscritos, &olNotify)) {
                     if (GetLastError() == ERROR_IO_PENDING) {
                         if (WaitForSingleObject(olNotify.hEvent, 1000) == WAIT_OBJECT_0) {
-                            GetOverlappedResult(g_listaJogadores[i].hPipe, &olNotify, &bytesEscritos, FALSE);
+                            GetOverlappedResult(ctx->listaJogadores[i].hPipe, &olNotify, &bytesEscritos, FALSE);
                             if (bytesEscritos != sizeof(MESSAGE)) {
-                                LogWarning(_T("[NOTIFICAR] WriteFile Overlapped enviou %lu bytes em vez de %zu para %s."), bytesEscritos, sizeof(MESSAGE), g_listaJogadores[i].username);
+                                // LogWarning(&ctx->csLog, _T("[NOTIFICAR] WriteFile Overlapped enviou %lu bytes em vez de %zu para %s."), bytesEscritos, sizeof(MESSAGE), ctx->listaJogadores[i].username);
                             }
                         }
                         else {
-                            LogWarning(_T("[NOTIFICAR] Timeout ao enviar notificação para %s. Cancelando IO."), g_listaJogadores[i].username);
-                            CancelIoEx(g_listaJogadores[i].hPipe, &olNotify);
+                            LogWarning(&ctx->csLog, _T("[NOTIFICAR] Timeout/Erro ao enviar notificação para %s. Cancelando IO."), ctx->listaJogadores[i].username);
+                            CancelIoEx(ctx->listaJogadores[i].hPipe, &olNotify);
                         }
                     }
                     else {
-                        LogWarning(_T("[NOTIFICAR] Falha ao enviar notificação para %s (pipe %p): %lu"), g_listaJogadores[i].username, g_listaJogadores[i].hPipe, GetLastError());
+                        LogWarning(&ctx->csLog, _T("[NOTIFICAR] Falha ao enviar notificação para %s (pipe %p): %lu"), ctx->listaJogadores[i].username, ctx->listaJogadores[i].hPipe, GetLastError());
                     }
                 }
                 else {
-                    GetOverlappedResult(g_listaJogadores[i].hPipe, &olNotify, &bytesEscritos, FALSE);
+                    GetOverlappedResult(ctx->listaJogadores[i].hPipe, &olNotify, &bytesEscritos, FALSE);
                     if (bytesEscritos != sizeof(MESSAGE)) {
-                        LogWarning(_T("[NOTIFICAR] WriteFile Síncrono (com overlapped handle) enviou %lu bytes em vez de %zu para %s."), bytesEscritos, sizeof(MESSAGE), g_listaJogadores[i].username);
+                        // LogWarning(&ctx->csLog, _T("[NOTIFICAR] WriteFile Síncrono (com overlapped) enviou %lu bytes em vez de %zu para %s."), bytesEscritos, sizeof(MESSAGE), ctx->listaJogadores[i].username);
                     }
                 }
                 CloseHandle(olNotify.hEvent);
             }
         }
     }
-    LeaveCriticalSection(&g_csListaJogadores);
+    LeaveCriticalSection(&ctx->csListaJogadores);
 }
