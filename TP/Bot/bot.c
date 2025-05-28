@@ -6,13 +6,11 @@
 #include <fcntl.h>  // For _setmode
 #include <io.h>     // For _setmode, _fileno
 #include <time.h>   // For srand, time
-#include <strsafe.h>
 
 #include "../Comum/compartilhado.h" // Shared structures and IPC names
 
 // Bot's dictionary settings
 #define MAX_BOT_DICT_WORDS 20000 // Max words bot can load
-#define BOT_DICTIONARY_FILE _T("bot_dicionario.txt") // Bot's dictionary file name
 
 // Definition of _countof if not available (e.g., older compilers)
 #ifndef _countof
@@ -93,8 +91,8 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     LogBot(&botCtx, _T("Bot '%s' a iniciar com tempo de reação de %d segundos..."), botCtx.botUsername, botCtx.reactionTimeSeconds);
 
-    if (!CarregarDicionarioBot(&botCtx, BOT_DICTIONARY_FILE)) {
-        LogErrorBot(&botCtx, _T("Falha ao carregar dicionário do bot '%s'. Encerrando."), BOT_DICTIONARY_FILE);
+    if (!CarregarDicionarioBot(&botCtx, _T("D:\\SO2\\TP_SO2\\TP\\Comum\\dicionario.txt"))) {
+        LogErrorBot(&botCtx, _T("Falha ao carregar dicionário do bot. Encerrando."));
         DeleteCriticalSection(&botCtx.csBotData);
         DeleteCriticalSection(&botCtx.csBotConsole);
         return 1;
@@ -120,8 +118,8 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     MESSAGE msgJoin;
     ZeroMemory(&msgJoin, sizeof(MESSAGE));
-    StringCchCopy(msgJoin.type, _countof(msgJoin.type), _T("JOIN"));
-    StringCchCopy(msgJoin.username, _countof(msgJoin.username), botCtx.botUsername);
+    _tcscpy_s(msgJoin.type, _countof(msgJoin.type), _T("JOIN"));
+    _tcscpy_s(msgJoin.username, _countof(msgJoin.username), botCtx.botUsername);
     EnviarMensagemAoServidorBot(&botCtx, &msgJoin);
 
     botCtx.hThreadReceptorPipeBot = CreateThread(NULL, 0, ThreadReceptorMensagensServidorBot, &botCtx, 0, NULL);
@@ -171,12 +169,12 @@ void LogBot(BOT_CONTEXT* ctx, const TCHAR* format, ...) {
     TCHAR finalBuffer[1280];
     va_list args;
     va_start(args, format);
-    StringCchVPrintf(buffer, _countof(buffer), format, args);
+    _vstprintf_s(buffer, _countof(buffer), format, args);
     va_end(args);
 
     SYSTEMTIME st;
     GetLocalTime(&st);
-    StringCchPrintf(finalBuffer, _countof(finalBuffer), _T("%02d:%02d:%02d.%03d [BOT-%s] %s\n"),
+    _stprintf_s(finalBuffer, _countof(finalBuffer), _T("%02d:%02d:%02d.%03d [BOT-%s] %s\n"),
         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, ctx->botUsername, buffer);
     _tprintf_s(finalBuffer);
     fflush(stdout);
@@ -191,12 +189,12 @@ void LogErrorBot(BOT_CONTEXT* ctx, const TCHAR* format, ...) {
     TCHAR finalBuffer[1280];
     va_list args;
     va_start(args, format);
-    StringCchVPrintf(buffer, _countof(buffer), format, args);
+    _vstprintf_s(buffer, _countof(buffer), format, args);
     va_end(args);
 
     SYSTEMTIME st;
     GetLocalTime(&st);
-    StringCchPrintf(finalBuffer, _countof(finalBuffer), _T("%02d:%02d:%02d.%03d [BOT-ERRO-%s] %s\n"),
+    _stprintf_s(finalBuffer, _countof(finalBuffer), _T("%02d:%02d:%02d.%03d [BOT-ERRO-%s] %s\n"),
         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, ctx->botUsername, buffer);
     _tprintf_s(finalBuffer);
     fflush(stdout);
@@ -211,12 +209,12 @@ void LogWarningBot(BOT_CONTEXT* ctx, const TCHAR* format, ...) {
     TCHAR finalBuffer[1280];
     va_list args;
     va_start(args, format);
-    StringCchVPrintf(buffer, _countof(buffer), format, args);
+    _vstprintf_s(buffer, _countof(buffer), format, args);
     va_end(args);
 
     SYSTEMTIME st;
     GetLocalTime(&st);
-    StringCchPrintf(finalBuffer, _countof(finalBuffer), _T("%02d:%02d:%02d.%03d [BOT-AVISO-%s] %s\n"),
+    _stprintf_s(finalBuffer, _countof(finalBuffer), _T("%02d:%02d:%02d.%03d [BOT-AVISO-%s] %s\n"),
         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, ctx->botUsername, buffer);
     _tprintf_s(finalBuffer);
     fflush(stdout);
@@ -228,7 +226,7 @@ BOOL ProcessarArgumentosBot(BOT_CONTEXT* ctx, int argc, TCHAR* argv[]) {
     if (argc != 3) {
         return FALSE;
     }
-    StringCchCopy(ctx->botUsername, MAX_USERNAME, argv[1]);
+    _tcscpy_s(ctx->botUsername, MAX_USERNAME, argv[1]);
     ctx->reactionTimeSeconds = _tstoi(argv[2]);
 
     if (ctx->reactionTimeSeconds <= 0) {
@@ -502,9 +500,9 @@ BOOL TentarEncontrarEEnviarPalavra(BOT_CONTEXT* ctx) {
         if (PodeFormarPalavra(ctx->botDicionario[i], letrasAtuais, numLetrasNoTabuleiro)) {
             MESSAGE msgPalavra;
             ZeroMemory(&msgPalavra, sizeof(MESSAGE));
-            StringCchCopy(msgPalavra.type, _countof(msgPalavra.type), _T("WORD"));
-            StringCchCopy(msgPalavra.username, _countof(msgPalavra.username), ctx->botUsername);
-            StringCchCopy(msgPalavra.data, _countof(msgPalavra.data), ctx->botDicionario[i]);
+            _tcscpy_s(msgPalavra.type, _countof(msgPalavra.type), _T("WORD"));
+            _tcscpy_s(msgPalavra.username, _countof(msgPalavra.username), ctx->botUsername);
+            _tcscpy_s(msgPalavra.data, _countof(msgPalavra.data), ctx->botDicionario[i]);
 
             EnviarMensagemAoServidorBot(ctx, &msgPalavra);
             LogBot(ctx, _T("Tentou a palavra: '%s'"), ctx->botDicionario[i]);

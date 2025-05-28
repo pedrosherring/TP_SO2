@@ -4,7 +4,6 @@
 #include <tchar.h>
 #include <fcntl.h> // Para _setmode
 #include <io.h>    // Para _setmode, _fileno
-#include <strsafe.h>
 
 #include "../Comum/compartilhado.h" // Ficheiro revisto
 
@@ -79,7 +78,7 @@ int _tmain(int argc, TCHAR* argv[]) {
         _tprintf(_T("Uso: jogoui.exe <username>\n"));
         return 1;
     }
-    StringCchCopy(uiCtx.meuUsername, MAX_USERNAME, argv[1]);
+    _tcscpy_s(uiCtx.meuUsername, MAX_USERNAME, argv[1]);
     InitializeCriticalSection(&uiCtx.csConsoleCliente);
 
     LogCliente(&uiCtx, _T("JogoUI para '%s' a iniciar..."), uiCtx.meuUsername);
@@ -101,8 +100,8 @@ int _tmain(int argc, TCHAR* argv[]) {
     }
 
     MESSAGE msgJoin; ZeroMemory(&msgJoin, sizeof(MESSAGE));
-    StringCchCopy(msgJoin.type, _countof(msgJoin.type), _T("JOIN"));
-    StringCchCopy(msgJoin.username, _countof(msgJoin.username), uiCtx.meuUsername);
+    _tcscpy_s(msgJoin.type, _countof(msgJoin.type), _T("JOIN"));
+    _tcscpy_s(msgJoin.username, _countof(msgJoin.username), uiCtx.meuUsername);
     EnviarMensagemAoServidor(&uiCtx, &msgJoin);
 
     uiCtx.hThreadReceptorPipe = CreateThread(NULL, 0, ThreadReceptorMensagensServidor, &uiCtx, 0, NULL);
@@ -188,7 +187,7 @@ void LogCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...) {
         TCHAR fbBuffer[1024];
         va_list fbArgs;
         va_start(fbArgs, format);
-        StringCchVPrintf(fbBuffer, _countof(fbBuffer), format, fbArgs);
+        _vstprintf_s(fbBuffer, _countof(fbBuffer), format, fbArgs);;
         va_end(fbArgs);
         // Fallback if username in ctx is not yet set or ctx is null
         _tprintf_s(_T("[JOGOUI-NO_CS_CTX] %s\n"), fbBuffer);
@@ -204,16 +203,16 @@ void LogCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...) {
     GetLocalTime(&st);
     size_t prefixLen = 0;
 
-    StringCchPrintf(buffer, _countof(buffer), _T("\n%02d:%02d:%02d.%03d [%s-JOGOUI] "),
+    _stprintf_s(buffer, _countof(buffer), _T("\n%02d:%02d:%02d.%03d [%s-JOGOUI] "),
         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, ctx->meuUsername[0] ? ctx->meuUsername : _T("CLIENT"));
 
-    (void)StringCchLength(buffer, _countof(buffer), &prefixLen);
+    prefixLen = _tcslen(buffer);
 
     if (prefixLen < _countof(buffer) - 1) {
-        StringCchVPrintf(buffer + prefixLen, _countof(buffer) - prefixLen, format, args);
+        _vstprintf_s(buffer + prefixLen, _countof(buffer) - prefixLen, format, args);
     }
 
-    StringCchCat(buffer, _countof(buffer), _T("\n"));
+    _tcscat_s(buffer, _countof(buffer), _T("\n"));
     _tprintf_s(buffer);
     fflush(stdout);
     va_end(args);
@@ -224,7 +223,7 @@ void LogErrorCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...) {
     TCHAR buffer[1024];
     va_list args;
     va_start(args, format);
-    StringCchVPrintf(buffer, _countof(buffer), format, args);
+    _vstprintf_s(buffer, _countof(buffer), format, args);
     va_end(args);
     LogCliente(ctx, _T("[ERRO] %s"), buffer);
 }
@@ -233,7 +232,7 @@ void LogWarningCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...) {
     TCHAR buffer[1024];
     va_list args;
     va_start(args, format);
-    StringCchVPrintf(buffer, _countof(buffer), format, args);
+    _vstprintf_s(buffer, _countof(buffer), format, args);
     va_end(args);
     LogCliente(ctx, _T("[AVISO] %s"), buffer);
 }
@@ -418,31 +417,31 @@ void MostrarEstadoJogoCliente(JOGOUI_CONTEXT* ctx) {
 void ProcessarInputUtilizador(JOGOUI_CONTEXT* ctx, const TCHAR* input) {
     MESSAGE msgParaServidor;
     ZeroMemory(&msgParaServidor, sizeof(MESSAGE));
-    StringCchCopy(msgParaServidor.username, MAX_USERNAME, ctx->meuUsername);
+    _tcscpy_s(msgParaServidor.username, MAX_USERNAME, ctx->meuUsername);
 
     if (_tcslen(input) == 0) {
         return;
     }
 
     if (_tcscmp(input, _T(":sair")) == 0) {
-        StringCchCopy(msgParaServidor.type, _countof(msgParaServidor.type), _T("EXIT"));
+        _tcscpy_s(msgParaServidor.type, _countof(msgParaServidor.type), _T("EXIT"));
         EnviarMensagemAoServidor(ctx, &msgParaServidor);
         ctx->clienteRodando = FALSE;
     }
     else if (_tcscmp(input, _T(":pont")) == 0) {
-        StringCchCopy(msgParaServidor.type, _countof(msgParaServidor.type), _T("GET_SCORE"));
+        _tcscpy_s(msgParaServidor.type, _countof(msgParaServidor.type), _T("GET_SCORE"));
         EnviarMensagemAoServidor(ctx, &msgParaServidor);
     }
     else if (_tcscmp(input, _T(":jogs")) == 0) {
-        StringCchCopy(msgParaServidor.type, _countof(msgParaServidor.type), _T("GET_JOGS"));
+        _tcscpy_s(msgParaServidor.type, _countof(msgParaServidor.type), _T("GET_JOGS"));
         EnviarMensagemAoServidor(ctx, &msgParaServidor);
     }
     else if (input[0] == _T(':')) {
         LogWarningCliente(ctx, _T("Comando desconhecido: '%s'"), input);
     }
     else {
-        StringCchCopy(msgParaServidor.type, _countof(msgParaServidor.type), _T("WORD"));
-        StringCchCopy(msgParaServidor.data, MAX_WORD, input);
+        _tcscpy_s(msgParaServidor.type, _countof(msgParaServidor.type), _T("WORD"));
+        _tcscpy_s(msgParaServidor.data, MAX_WORD, input);
         EnviarMensagemAoServidor(ctx, &msgParaServidor);
     }
 }
