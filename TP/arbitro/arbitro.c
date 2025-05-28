@@ -791,35 +791,36 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
     MESSAGE msg;
     DWORD bytesLidos, bytesEscritos;
     JOGADOR_INFO_ARBITRO* meuJogadorInfo = NULL;
-    TCHAR usernameEsteCliente[MAX_USERNAME];
-    usernameEsteCliente[0] = _T('\0');
+    TCHAR usernameEsteCliente[MAX_USERNAME] = { 0 };
     BOOL esteClienteAtivoNaThread = FALSE;
     int meuIndiceNaLista = -1;
+    BOOL continuar = TRUE;
 
-    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Nova thread para cliente iniciada."), hPipe);
-
-    OVERLAPPED olRead; ZeroMemory(&olRead, sizeof(OVERLAPPED));
+    OVERLAPPED olRead = { 0 };
     olRead.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (olRead.hEvent == NULL) {
         LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Falha ao criar evento de leitura."), hPipe);
-        goto cleanup_cliente_thread;
+        continuar = FALSE;
     }
 
-    ResetEvent(olRead.hEvent);
-    if (ReadFile(hPipe, &msg, sizeof(MESSAGE), &bytesLidos, &olRead) || GetLastError() == ERROR_IO_PENDING) {
-        if (GetLastError() == ERROR_IO_PENDING) {
+    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Nova thread para cliente iniciada."), hPipe);
+
+    // Processar mensagem JOIN inicial
+    if (continuar) {
+        ResetEvent(olRead.hEvent);
+        if (!ReadFile(hPipe, &msg, sizeof(MESSAGE), &bytesLidos, &olRead) && GetLastError() == ERROR_IO_PENDING) {
             if (WaitForSingleObject(olRead.hEvent, IO_TIMEOUT) != WAIT_OBJECT_0) {
                 LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Timeout/Erro (%lu) ReadFile JOIN."), hPipe, GetLastError());
-                goto cleanup_cliente_thread;
+                continuar = FALSE;
             }
-            if (!GetOverlappedResult(hPipe, &olRead, &bytesLidos, FALSE)) {
+            else if (!GetOverlappedResult(hPipe, &olRead, &bytesLidos, FALSE)) {
                 LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] GetOverlappedResult JOIN falhou (%lu)."), hPipe, GetLastError());
-                goto cleanup_cliente_thread;
+                continuar = FALSE;
             }
         }
 
-        if (bytesLidos == sizeof(MESSAGE) && _tcscmp(msg.type, _T("JOIN")) == 0) {
-            _tcscpy_s(usernameEsteCliente, MAX_USERNAME, msg.username);
+        if (continuar && bytesLidos == sizeof(MESSAGE) && _tcscmp(msg.type, _T("JOIN")) == 0) {
+            _tcscpy_s(usernameEsteCliente, _countof(usernameEsteCliente), msg.username);
             Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Recebido JOIN de '%s'."), hPipe, usernameEsteCliente);
 
             EnterCriticalSection(&ctx->csListaJogadores);
@@ -827,67 +828,65 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
             if (idxExistente != -1) {
                 LeaveCriticalSection(&ctx->csListaJogadores);
                 LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Username '%s' já em uso."), hPipe, usernameEsteCliente);
-                MESSAGE resp; ZeroMemory(&resp, sizeof(MESSAGE));
+                MESSAGE resp = { 0 };
                 _tcscpy_s(resp.type, _countof(resp.type), _T("JOIN_USER_EXISTS"));
                 _tcscpy_s(resp.data, _countof(resp.data), _T("Username em uso."));
                 WriteFile(hPipe, &resp, sizeof(MESSAGE), &bytesEscritos, NULL);
-                goto cleanup_cliente_thread;
+                continuar = FALSE;
             }
-            if (ctx->totalJogadoresAtivos >= MAX_JOGADORES) {
+            else if (ctx->totalJogadoresAtivos >= MAX_JOGADORES) {
                 LeaveCriticalSection(&ctx->csListaJogadores);
                 LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Jogo cheio. Rejeitando '%s'."), hPipe, usernameEsteCliente);
-                MESSAGE resp; ZeroMemory(&resp, sizeof(MESSAGE));
+                MESSAGE resp = { 0 };
                 _tcscpy_s(resp.type, _countof(resp.type), _T("JOIN_GAME_FULL"));
                 _tcscpy_s(resp.data, _countof(resp.data), _T("Jogo cheio."));
                 WriteFile(hPipe, &resp, sizeof(MESSAGE), &bytesEscritos, NULL);
-                goto cleanup_cliente_thread;
+                continuar = FALSE;
             }
+            else {
+                for (int i = 0; i < MAX_JOGADORES; ++i) {
+                    if (!ctx->listaJogadores[i].ativo) {
+                        meuIndiceNaLista = i;
+                        meuJogadorInfo = &ctx->listaJogadores[i];
+                        _tcscpy_s(meuJogadorInfo->username, _countof(meuJogadorInfo->username), usernameEsteCliente);
+                        meuJogadorInfo->pontos = 0.0f;
+                        meuJogadorInfo->hPipe = hPipe;
+                        meuJogadorInfo->ativo = TRUE;
+                        meuJogadorInfo->dwThreadIdCliente = GetCurrentThreadId();
+                        ctx->totalJogadoresAtivos++;
+                        esteClienteAtivoNaThread = TRUE;
 
-            for (int i = 0; i < MAX_JOGADORES; ++i) {
-                if (!ctx->listaJogadores[i].ativo) {
-                    meuIndiceNaLista = i;
-                    meuJogadorInfo = &ctx->listaJogadores[i];
-                    _tcscpy_s(meuJogadorInfo->username, MAX_USERNAME, usernameEsteCliente);
-                    meuJogadorInfo->pontos = 0.0f;
-                    meuJogadorInfo->hPipe = hPipe;
-                    meuJogadorInfo->ativo = TRUE;
-                    meuJogadorInfo->dwThreadIdCliente = GetCurrentThreadId();
-                    ctx->totalJogadoresAtivos++;
-                    esteClienteAtivoNaThread = TRUE;
+                        Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Jogador '%s' adicionado (idx %d). Total: %lu"), hPipe, usernameEsteCliente, meuIndiceNaLista, ctx->totalJogadoresAtivos);
 
-                    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Jogador '%s' adicionado (idx %d). Total: %lu"), hPipe, usernameEsteCliente, meuIndiceNaLista, ctx->totalJogadoresAtivos);
+                        MESSAGE respOK = { 0 };
+                        _tcscpy_s(respOK.type, _countof(respOK.type), _T("JOIN_OK"));
+                        _sntprintf_s(respOK.data, _countof(respOK.data), _TRUNCATE, _T("Bem-vindo, %s!"), usernameEsteCliente);
+                        WriteFile(hPipe, &respOK, sizeof(MESSAGE), &bytesEscritos, NULL);
 
-                    MESSAGE respOK; ZeroMemory(&respOK, sizeof(MESSAGE));
-                    _tcscpy_s(respOK.type, _countof(respOK.type), _T("JOIN_OK"));
-                    _sntprintf_s(respOK.data, _countof(respOK.data), _TRUNCATE, _T("Bem-vindo, %s!"), usernameEsteCliente);
-                    WriteFile(hPipe, &respOK, sizeof(MESSAGE), &bytesEscritos, NULL);
+                        MESSAGE notifJoin = { 0 };
+                        _tcscpy_s(notifJoin.type, _countof(notifJoin.type), _T("GAME_UPDATE"));
+                        _sntprintf_s(notifJoin.data, _countof(notifJoin.data), _TRUNCATE, _T("Jogador %s entrou no jogo."), usernameEsteCliente);
+                        NotificarTodosOsJogadores(ctx, &notifJoin, usernameEsteCliente);
 
-                    MESSAGE notifJoin; ZeroMemory(&notifJoin, sizeof(MESSAGE));
-                    _tcscpy_s(notifJoin.type, _countof(notifJoin.type), _T("GAME_UPDATE"));
-                    _sntprintf_s(notifJoin.data, _countof(notifJoin.data), _TRUNCATE, _T("Jogador %s entrou no jogo."), usernameEsteCliente);
-                    NotificarTodosOsJogadores(ctx, &notifJoin, usernameEsteCliente);
-
-                    VerificarEstadoJogo(ctx);
-                    break;
+                        VerificarEstadoJogo(ctx);
+                        break;
+                    }
                 }
-            }
-            LeaveCriticalSection(&ctx->csListaJogadores);
-            if (!esteClienteAtivoNaThread) {
-                LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Falha ao adicionar '%s' (sem slot disponível?)."), hPipe, usernameEsteCliente);
-                goto cleanup_cliente_thread;
+                if (!esteClienteAtivoNaThread) {
+                    LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Falha ao adicionar '%s' (sem slot disponível?)."), hPipe, usernameEsteCliente);
+                    continuar = FALSE;
+                }
+                LeaveCriticalSection(&ctx->csListaJogadores);
             }
         }
         else {
             LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Primeira msg não foi JOIN ou bytes errados (%lu). Desconectando."), hPipe, bytesLidos);
-            goto cleanup_cliente_thread;
+            continuar = FALSE;
         }
     }
-    else {
-        LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Falha ao ler 1ª msg (JOIN): %lu."), hPipe, GetLastError());
-        goto cleanup_cliente_thread;
-    }
 
-    while (ctx->servidorEmExecucao && esteClienteAtivoNaThread) {
+    // Loop principal de processamento de mensagens
+    while (continuar && ctx->servidorEmExecucao && esteClienteAtivoNaThread) {
         ResetEvent(olRead.hEvent);
         BOOL sucessoLeitura = ReadFile(hPipe, &msg, sizeof(MESSAGE), &bytesLidos, &olRead);
         DWORD dwErrorRead = GetLastError();
@@ -903,27 +902,29 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
                 if (!PeekNamedPipe(hPipe, NULL, 0, &pkBytesRead, &pkTotalBytesAvail, &pkBytesLeftThisMessage)) {
                     if (GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_PIPE_NOT_CONNECTED) {
                         LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Pipe para '%s' quebrou durante timeout. %lu"), hPipe, usernameEsteCliente, GetLastError());
-                        esteClienteAtivoNaThread = FALSE; break;
+                        esteClienteAtivoNaThread = FALSE;
+                        break;
                     }
                 }
                 continue;
             }
             else if (waitRes != WAIT_OBJECT_0) {
                 LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Erro %lu ao esperar ReadFile para '%s'."), hPipe, GetLastError(), usernameEsteCliente);
-                esteClienteAtivoNaThread = FALSE; break;
+                esteClienteAtivoNaThread = FALSE;
+                break;
             }
             if (!GetOverlappedResult(hPipe, &olRead, &bytesLidos, FALSE)) {
                 LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] GOR falhou após ReadFile para '%s': %lu."), hPipe, usernameEsteCliente, GetLastError());
-                esteClienteAtivoNaThread = FALSE; break;
+                esteClienteAtivoNaThread = FALSE;
+                break;
             }
             sucessoLeitura = TRUE;
         }
         else if (!sucessoLeitura) {
             if (ctx->servidorEmExecucao) LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] ReadFile falhou para '%s': %lu."), hPipe, usernameEsteCliente, dwErrorRead);
-            esteClienteAtivoNaThread = FALSE; break;
+            esteClienteAtivoNaThread = FALSE;
+            break;
         }
-
-        if (!ctx->servidorEmExecucao) break;
 
         if (sucessoLeitura && bytesLidos == sizeof(MESSAGE)) {
             EnterCriticalSection(&ctx->csListaJogadores);
@@ -933,7 +934,8 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
                 _tcscmp(ctx->listaJogadores[meuIndiceNaLista].username, usernameEsteCliente) != 0) {
                 LeaveCriticalSection(&ctx->csListaJogadores);
                 LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Jogador '%s' tornou-se inválido (idx %d) ou pipe/username desatualizado. Encerrando thread."), hPipe, usernameEsteCliente, meuIndiceNaLista);
-                esteClienteAtivoNaThread = FALSE; break;
+                esteClienteAtivoNaThread = FALSE;
+                break;
             }
             meuJogadorInfo = &ctx->listaJogadores[meuIndiceNaLista];
             LeaveCriticalSection(&ctx->csListaJogadores);
@@ -943,7 +945,7 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
                 ValidarPalavraJogo(args, msg.data, usernameEsteCliente);
             }
             else if (_tcscmp(msg.type, _T("GET_SCORE")) == 0) {
-                MESSAGE respScore; ZeroMemory(&respScore, sizeof(MESSAGE));
+                MESSAGE respScore = { 0 };
                 _tcscpy_s(respScore.type, _countof(respScore.type), _T("SCORE_UPDATE"));
                 _tcscpy_s(respScore.username, _countof(respScore.username), usernameEsteCliente);
 
@@ -960,12 +962,11 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
                 WriteFile(hPipe, &respScore, sizeof(MESSAGE), &bytesEscritos, NULL);
             }
             else if (_tcscmp(msg.type, _T("GET_JOGS")) == 0) {
-                MESSAGE respJogs; ZeroMemory(&respJogs, sizeof(MESSAGE));
+                MESSAGE respJogs = { 0 };
                 _tcscpy_s(respJogs.type, _countof(respJogs.type), _T("PLAYER_LIST_UPDATE"));
                 _tcscpy_s(respJogs.username, _countof(respJogs.username), _T("Arbitro"));
 
-                TCHAR listaBuffer[sizeof(respJogs.data)];
-                listaBuffer[0] = _T('\0');
+                TCHAR listaBuffer[sizeof(respJogs.data)] = { 0 };
                 TCHAR* pBufferAtual = listaBuffer;
                 size_t bufferRestante = _countof(listaBuffer);
 
@@ -1004,20 +1005,23 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
                 LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] '%s' enviou msg desconhecida: '%s'"), hPipe, usernameEsteCliente, msg.type);
             }
         }
-        else if (!sucessoLeitura) {
-            esteClienteAtivoNaThread = FALSE; break;
+        else if (!sucessoLeitura || bytesLidos == 0) {
+            if (ctx->servidorEmExecucao) {
+                Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Cliente '%s' desconectou (EOF ou erro)."), hPipe, usernameEsteCliente);
+            }
+            esteClienteAtivoNaThread = FALSE;
+            break;
         }
-        else if (bytesLidos == 0 && sucessoLeitura) {
-            if (ctx->servidorEmExecucao) Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Cliente '%s' desconectou (EOF)."), hPipe, usernameEsteCliente);
-            esteClienteAtivoNaThread = FALSE; break;
-        }
-        else if (bytesLidos != 0) {
-            if (ctx->servidorEmExecucao) LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Erro de framing para '%s'. Bytes: %lu. Esperado: %zu."), hPipe, usernameEsteCliente, bytesLidos, sizeof(MESSAGE));
-            esteClienteAtivoNaThread = FALSE; break;
+        else {
+            if (ctx->servidorEmExecucao) {
+                LogError(&ctx->csLog, _T("[CLIENT_THREAD %p] Erro de framing para '%s'. Bytes: %lu. Esperado: %zu."), hPipe, usernameEsteCliente, bytesLidos, sizeof(MESSAGE));
+            }
+            esteClienteAtivoNaThread = FALSE;
+            break;
         }
     }
 
-cleanup_cliente_thread:
+    // Bloco de limpeza
     Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Limpando para '%s'..."), hPipe, usernameEsteCliente[0] ? usernameEsteCliente : _T("(desconhecido/não juntou)"));
 
     if (usernameEsteCliente[0] != _T('\0') && meuIndiceNaLista != -1) {
@@ -1038,26 +1042,29 @@ cleanup_cliente_thread:
         LeaveCriticalSection(&ctx->csListaJogadores);
     }
 
-    if (olRead.hEvent) CloseHandle(olRead.hEvent);
+    if (olRead.hEvent) {
+        CloseHandle(olRead.hEvent);
+    }
 
     if (hPipe != INVALID_HANDLE_VALUE) {
         EnterCriticalSection(&ctx->csListaJogadores);
         for (int i = 0; i < MAX_JOGADORES; ++i) {
             if (ctx->listaJogadores[i].hPipe == hPipe) {
-                LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Pipe ainda estava na lista de jogadores para '%s' no cleanup. Marcando como inválido."), hPipe, ctx->listaJogadores[i].username);
+                LogWarning(&ctx->csLog, _T("[CLIENT_THREAD %p] Pipe ainda estava na lista de jogadores para '%s' no momento da limpeza."), hPipe, ctx->listaJogadores[i].username);
                 ctx->listaJogadores[i].hPipe = INVALID_HANDLE_VALUE;
                 break;
             }
         }
         LeaveCriticalSection(&ctx->csListaJogadores);
-
         DisconnectNamedPipe(hPipe);
         CloseHandle(hPipe);
     }
 
-    if (args != NULL) free(args);
+    if (args) {
+        free(args);
+    }
 
-    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Thread para '%s' terminada."), hPipe, usernameEsteCliente[0] ? usernameEsteCliente : _T("(desconhecido/não juntou)"));
+    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Thread terminada para '%s'."), hPipe, usernameEsteCliente[0] ? usernameEsteCliente : _T("(desconhecido/não juntou)"));
     return 0;
 }
 
