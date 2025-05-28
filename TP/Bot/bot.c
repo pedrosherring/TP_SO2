@@ -91,7 +91,7 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     LogBot(&botCtx, _T("Bot '%s' a iniciar com tempo de reação de %d segundos..."), botCtx.botUsername, botCtx.reactionTimeSeconds);
 
-    if (!CarregarDicionarioBot(&botCtx, _T("D:\\SO2\\TP_SO2\\TP\\Comum\\dicionario.txt"))) {
+    if (!CarregarDicionarioBot(&botCtx, _T("..\\Comum\\dicionario.txt"))) {
         LogErrorBot(&botCtx, _T("Falha ao carregar dicionário do bot. Encerrando."));
         DeleteCriticalSection(&botCtx.csBotData);
         DeleteCriticalSection(&botCtx.csBotConsole);
