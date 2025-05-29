@@ -117,15 +117,15 @@ int _tmain(int argc, TCHAR* argv[]) {
     }
 
     HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
-    TCHAR inputLineBuffer[MAX_WORD + 20]; 
-    TCHAR displayPromptBuffer[MAX_USERNAME + 5]; 
+    TCHAR inputLineBuffer[MAX_WORD + 20];
+    TCHAR displayPromptBuffer[MAX_USERNAME + 5];
     int inputBufferPos = 0;
     ZeroMemory(inputLineBuffer, sizeof(inputLineBuffer));
     _sntprintf_s(displayPromptBuffer, _countof(displayPromptBuffer), _TRUNCATE, _T("%s> "), uiCtx.meuUsername);
 
     EnterCriticalSection(&uiCtx.csConsoleCliente);
     MostrarEstadoJogoCliente(&uiCtx);
-    _tprintf(_T("%s"), displayPromptBuffer); 
+    _tprintf(_T("%s"), displayPromptBuffer);
     fflush(stdout);
     LeaveCriticalSection(&uiCtx.csConsoleCliente);
 
