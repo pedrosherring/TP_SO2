@@ -24,9 +24,4 @@
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
-  <ItemGroup>
-    <Text Include="dicionario.txt">
-      <Filter>Source Files</Filter>
-    </Text>
-  </ItemGroup>
 </Project>

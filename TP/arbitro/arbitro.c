@@ -246,7 +246,7 @@ BOOL InicializarServidor(SERVER_CONTEXT* ctx) {
     ConfigurarValoresRegistry(ctx);
     Log(&ctx->csLog, _T("[INIT] Configurações: MAXLETRAS=%d, RITMO=%ds"), ctx->maxLetrasConfig, ctx->ritmoConfigSegundos);
 
-    if (!CarregarDicionarioServidor(ctx, _T("D:\\SO2\\TP_SO2\\TP\\Comum\\dicionario.txt"))) {
+    if (!CarregarDicionarioServidor(ctx, _T("..\\..\\Comum\\dicionario.txt"))) {
         LogError(&ctx->csLog, _T("[INIT] Falha ao carregar dicionário."));
         return FALSE;
     }

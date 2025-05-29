@@ -132,9 +132,6 @@
   <ItemGroup>
     <ClInclude Include="arbitro.h" />
   </ItemGroup>
-  <ItemGroup>
-    <Text Include="dicionario.txt" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

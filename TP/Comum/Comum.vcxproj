@@ -22,7 +22,7 @@
     <ClInclude Include="compartilhado.h" />
   </ItemGroup>
   <ItemGroup>
-    <Text Include="dicionario.txt" />
+    <Text Include="..\arbitro\dicionario.txt" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
