@@ -133,7 +133,6 @@ int _tmain(int argc, TCHAR* argv[]) {
         return 1;
     }
 
-    LogBot(&botCtx, _T("Bot conectado e thread receptora iniciada. Entrando no loop principal..."));
     BotLoopPrincipal(&botCtx);
 
     LogBot(&botCtx, _T("Loop principal do bot terminado. Aguardando thread receptora..."));
@@ -238,7 +237,6 @@ BOOL ProcessarArgumentosBot(BOT_CONTEXT* ctx, int argc, TCHAR* argv[]) {
 
 BOOL CarregarDicionarioBot(BOT_CONTEXT* ctx, const TCHAR* nomeArquivo) {
     FILE* arquivo;
-    LogBot(ctx, _T("A carregar dicionário do bot de '%s'..."), nomeArquivo);
 
     if (_tfopen_s(&arquivo, nomeArquivo, _T("r, ccs=UTF-8")) != 0 || arquivo == NULL) {
         LogErrorBot(ctx, _T("Erro ao abrir ficheiro de dicionário do bot '%s'. Verifique se o arquivo existe."), nomeArquivo);
@@ -290,7 +288,6 @@ void LiberarDicionarioBot(BOT_CONTEXT* ctx) {
 BOOL ConectarAoServidorBot(BOT_CONTEXT* ctx) {
     int tentativas = 0;
     const int MAX_TENTATIVAS_PIPE = 5;
-    LogBot(ctx, _T("Tentando conectar ao pipe do servidor: %s"), PIPE_NAME);
 
     while (tentativas < MAX_TENTATIVAS_PIPE && ctx->botRodando) {
         ctx->hPipeServidorBot = CreateFile(
@@ -324,7 +321,6 @@ BOOL ConectarAoServidorBot(BOT_CONTEXT* ctx) {
 }
 
 BOOL AbrirRecursosCompartilhadosBot(BOT_CONTEXT* ctx) {
-    LogBot(ctx, _T("Tentando abrir recursos compartilhados..."));
     ctx->hMapFileShmBot = OpenFileMapping(FILE_MAP_READ, FALSE, SHM_NAME);
     if (ctx->hMapFileShmBot == NULL) {
         LogErrorBot(ctx, _T("Falha ao abrir FileMapping '%s': %lu"), SHM_NAME, GetLastError());
@@ -352,7 +348,6 @@ BOOL AbrirRecursosCompartilhadosBot(BOT_CONTEXT* ctx) {
         return FALSE;
     }
 
-    LogBot(ctx, _T("Recursos compartilhados abertos com sucesso."));
     if (ctx->pDadosShmBot) {
         WaitForSingleObject(ctx->hMutexShmBot, INFINITE);
         ctx->botUltimaGeracaoConhecidaShm = ctx->pDadosShmBot->generationCount;
@@ -557,7 +552,6 @@ DWORD WINAPI ThreadReceptorMensagensServidorBot(LPVOID param) {
         if (ctx) ctx->botRodando = FALSE;
         return 1;
     }
-    LogBot(ctx, _T("TRA: Thread Receptora de Mensagens do Servidor iniciada."));
 
     while (ctx->botRodando) {
         ResetEvent(ovReadPipe.hEvent);
@@ -594,8 +588,8 @@ DWORD WINAPI ThreadReceptorMensagensServidorBot(LPVOID param) {
         if (!ctx->botRodando) break;
 
         if (sucessoLeitura && bytesLidos == sizeof(MESSAGE)) {
-            LogBot(ctx, _T("TRA: Recebido do servidor: Tipo='%s', User='%s', Data='%s', Pts=%d"),
-                msgDoServidor.type, msgDoServidor.username, msgDoServidor.data, msgDoServidor.pontos);
+            LogBot(ctx, _T("TRA: Recebido do servidor: '%s' (Pts=%d)"),
+                msgDoServidor.data, msgDoServidor.pontos);
 
             if (_tcscmp(msgDoServidor.type, _T("SHUTDOWN")) == 0) {
                 LogWarningBot(ctx, _T("TRA: Recebida mensagem SHUTDOWN do servidor. Encerrando bot..."));
@@ -649,6 +643,5 @@ DWORD WINAPI ThreadReceptorMensagensServidorBot(LPVOID param) {
     }
 
     if (ovReadPipe.hEvent) CloseHandle(ovReadPipe.hEvent);
-    LogBot(ctx, _T("TRA: Thread Receptora de Mensagens do Servidor a terminar."));
     return 0;
 }

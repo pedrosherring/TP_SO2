@@ -20,6 +20,7 @@
 #define READ_TIMEOUT_THREAD_JOGADOR 500
 
 #define MIN_JOGADORES_PARA_INICIAR 2
+#define MUTEX_ARBITRO_SINGLE _T("ArbitroSingleMutex")
 
 // Estruturas internas do árbitro
 typedef struct {
@@ -90,6 +91,20 @@ int _tmain(int argc, TCHAR* argv[]) {
     (void)_setmode(_fileno(stderr), _O_WTEXT);
 #endif
 
+    HANDLE hMutexArbitroSingle = CreateMutex(NULL, TRUE, MUTEX_ARBITRO_SINGLE);
+
+    if (hMutexArbitroSingle == NULL) {
+        _tprintf(_T("Erro ao criar Mutex do árbitro: %lu\n"), GetLastError());
+        return 1; // Erro fatal
+    }
+
+    // Verifica se o Mutex já existia (outra instância já está a correr)
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        _tprintf(_T("Outra instância do Árbitro já está a correr. Encerrando esta instância.\n"));
+        CloseHandle(hMutexArbitroSingle); // Fechar o handle que acabamos de abrir
+        return 0; // Terminar a aplicação sem erro
+    }
+
     SERVER_CONTEXT serverCtx;
     ZeroMemory(&serverCtx, sizeof(SERVER_CONTEXT));
 
@@ -99,6 +114,8 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     if (!InicializarServidor(&serverCtx)) {
         LogError(&serverCtx.csLog, _T("[ARBITRO] Falha ao inicializar o servidor. Encerrando."));
+        ReleaseMutex(hMutexArbitroSingle);
+        CloseHandle(hMutexArbitroSingle);
         EncerrarServidor(&serverCtx);
         DeleteCriticalSection(&serverCtx.csLog);
         return 1;
@@ -228,11 +245,11 @@ int _tmain(int argc, TCHAR* argv[]) {
             }
         }
     }
-
-    Log(&serverCtx.csLog, _T("[ARBITRO] Loop principal de aceitação de conexões terminado."));
     if (hThreads[0] != NULL) { WaitForSingleObject(hThreads[0], INFINITE); CloseHandle(hThreads[0]); }
     if (hThreads[1] != NULL) { WaitForSingleObject(hThreads[1], INFINITE); CloseHandle(hThreads[1]); }
 
+    ReleaseMutex(hMutexArbitroSingle);
+    CloseHandle(hMutexArbitroSingle);
     EncerrarServidor(&serverCtx);
     Log(&serverCtx.csLog, _T("[ARBITRO] Servidor encerrado."));
     DeleteCriticalSection(&serverCtx.csLog);
@@ -269,32 +286,109 @@ BOOL InicializarServidor(SERVER_CONTEXT* ctx) {
 
 void EncerrarServidor(SERVER_CONTEXT* ctx) {
     Log(&ctx->csLog, _T("[ENCERRAR] Iniciando encerramento do servidor..."));
+    Log(&ctx->csLog, _T("[ENCERRAR] Estado servidorEmExecucao: %s"),
+        ctx->servidorEmExecucao ? _T("TRUE") : _T("FALSE"));
 
-    if (ctx->servidorEmExecucao) {
-        ctx->servidorEmExecucao = FALSE;
+    // Usar uma variável estática para evitar múltiplas execuções
+    static BOOL jaExecutado = FALSE;
+    if (jaExecutado) {
+        Log(&ctx->csLog, _T("[ENCERRAR] Encerramento já foi executado anteriormente."));
+        return;
+    }
+    jaExecutado = TRUE;
 
-        MESSAGE msgShutdown; ZeroMemory(&msgShutdown, sizeof(MESSAGE));
-        _tcscpy_s(msgShutdown.type, _countof(msgShutdown.type), _T("SHUTDOWN"));
-        _tcscpy_s(msgShutdown.username, _countof(msgShutdown.username), _T("Arbitro"));
-        _tcscpy_s(msgShutdown.data, _countof(msgShutdown.data), _T("O servidor está a encerrar."));
-        NotificarTodosOsJogadores(ctx, &msgShutdown, NULL);
+    // Sempre definir como FALSE para parar novas operações
+    ctx->servidorEmExecucao = FALSE;
 
-        if (ctx->hEventoShmUpdate) SetEvent(ctx->hEventoShmUpdate);
+    // SEMPRE determinar o vencedor, independentemente do estado anterior
+    TCHAR vencedorUsername[MAX_USERNAME] = _T("");
+    float maiorPontuacao = -1000.0f;
+    BOOL empate = FALSE;
+    BOOL jogadoresEncontrados = FALSE;
 
-        HANDLE hSelfConnect = CreateFile(PIPE_NAME, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-        if (hSelfConnect != INVALID_HANDLE_VALUE) {
-            CloseHandle(hSelfConnect);
+    Log(&ctx->csLog, _T("[ENCERRAR] Determinando vencedor..."));
+
+    EnterCriticalSection(&ctx->csListaJogadores);
+    for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
+        if (ctx->listaJogadores[i].ativo) {
+            jogadoresEncontrados = TRUE;
+            Log(&ctx->csLog, _T("[ENCERRAR] Jogador %s com %.1f pontos"),
+                ctx->listaJogadores[i].username, ctx->listaJogadores[i].pontos);
+
+            if (ctx->listaJogadores[i].pontos > maiorPontuacao) {
+                maiorPontuacao = ctx->listaJogadores[i].pontos;
+                _tcscpy_s(vencedorUsername, _countof(vencedorUsername), ctx->listaJogadores[i].username);
+                empate = FALSE;
+            }
+            else if (ctx->listaJogadores[i].pontos == maiorPontuacao) {
+                empate = TRUE;
+            }
         }
     }
+    LeaveCriticalSection(&ctx->csListaJogadores);
 
-    Log(&ctx->csLog, _T("[ENCERRAR] Aguardando um momento para as threads de cliente... (1s)"));
-    Sleep(1000);
+    // SEMPRE notificar sobre o resultado do jogo
+    MESSAGE msgVencedor;
+    ZeroMemory(&msgVencedor, sizeof(MESSAGE));
+    _tcscpy_s(msgVencedor.type, _countof(msgVencedor.type), _T("GAME_WINNER"));
+    _tcscpy_s(msgVencedor.username, _countof(msgVencedor.username), _T("Arbitro"));
 
+    if (jogadoresEncontrados) {
+        if (!empate && vencedorUsername[0] != _T('\0')) {
+            _sntprintf_s(msgVencedor.data, _countof(msgVencedor.data), _TRUNCATE,
+                _T("O jogo terminou! O vencedor é %s com %.1f pontos!"), vencedorUsername, maiorPontuacao);
+            Log(&ctx->csLog, _T("[ENCERRAR] Vencedor: %s com %.1f pontos."), vencedorUsername, maiorPontuacao);
+        }
+        else if (empate) {
+            _sntprintf_s(msgVencedor.data, _countof(msgVencedor.data), _TRUNCATE,
+                _T("O jogo terminou! Houve um empate com %.1f pontos!"), maiorPontuacao);
+            Log(&ctx->csLog, _T("[ENCERRAR] Empate com %.1f pontos."), maiorPontuacao);
+        }
+        else {
+            _tcscpy_s(msgVencedor.data, _countof(msgVencedor.data),
+                _T("O jogo terminou! Erro na determinação do vencedor."));
+            Log(&ctx->csLog, _T("[ENCERRAR] Erro na determinação do vencedor."));
+        }
+    }
+    else {
+        _tcscpy_s(msgVencedor.data, _countof(msgVencedor.data),
+            _T("O jogo terminou! Nenhum jogador ativo encontrado."));
+        Log(&ctx->csLog, _T("[ENCERRAR] Nenhum jogador ativo encontrado."));
+    }
+
+    // SEMPRE enviar mensagem do vencedor
+    Log(&ctx->csLog, _T("[ENCERRAR] Enviando resultado do jogo..."));
+    NotificarTodosOsJogadores(ctx, &msgVencedor, NULL);
+
+    // Aguardar para garantir que a mensagem seja processada
+    Sleep(2000);
+
+    // SEMPRE enviar mensagem de shutdown
+    MESSAGE msgShutdown;
+    ZeroMemory(&msgShutdown, sizeof(MESSAGE));
+    _tcscpy_s(msgShutdown.type, _countof(msgShutdown.type), _T("SHUTDOWN"));
+    _tcscpy_s(msgShutdown.username, _countof(msgShutdown.username), _T("Arbitro"));
+    _tcscpy_s(msgShutdown.data, _countof(msgShutdown.data), _T("O servidor está a encerrar."));
+
+    Log(&ctx->csLog, _T("[ENCERRAR] Enviando mensagem de shutdown..."));
+    NotificarTodosOsJogadores(ctx, &msgShutdown, NULL);
+
+    if (ctx->hEventoShmUpdate) SetEvent(ctx->hEventoShmUpdate);
+
+    // Tentar conectar consigo mesmo para acordar threads bloqueadas
+    HANDLE hSelfConnect = CreateFile(PIPE_NAME, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (hSelfConnect != INVALID_HANDLE_VALUE) {
+        CloseHandle(hSelfConnect);
+    }
+
+    Log(&ctx->csLog, _T("[ENCERRAR] Aguardando threads de cliente terminarem... (3s)"));
+    Sleep(3000);
+
+    // Limpar recursos dos jogadores
     if (ctx->csListaJogadores.DebugInfo != NULL) {
         EnterCriticalSection(&ctx->csListaJogadores);
         for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
             if (ctx->listaJogadores[i].hPipe != INVALID_HANDLE_VALUE) {
-                LogWarning(&ctx->csLog, _T("[ENCERRAR] Pipe do jogador %s (idx %lu) ainda aberto. Fechando."), ctx->listaJogadores[i].username, i);
                 CloseHandle(ctx->listaJogadores[i].hPipe);
                 ctx->listaJogadores[i].hPipe = INVALID_HANDLE_VALUE;
             }
@@ -305,15 +399,14 @@ void EncerrarServidor(SERVER_CONTEXT* ctx) {
         DeleteCriticalSection(&ctx->csListaJogadores);
     }
     else {
-        LogWarning(&ctx->csLog, _T("[ENCERRAR] Critical section da lista de jogadores não inicializada ou já deletada."));
+        LogWarning(&ctx->csLog, _T("[ENCERRAR] Seção crítica da lista de jogadores não inicializada ou já deletada."));
     }
 
     LimparMemoriaPartilhadaArbitro(ctx);
     LiberarDicionarioServidor(ctx);
 
-    Log(&ctx->csLog, _T("[ENCERRAR] Recursos principais do servidor libertados."));
+    Log(&ctx->csLog, _T("[ENCERRAR] Recursos principais do servidor liberados."));
 }
-
 // Funções de Log
 void Log(CRITICAL_SECTION* csLogParam, const TCHAR* format, ...) {
     if (csLogParam == NULL || csLogParam->DebugInfo == NULL) {
@@ -627,7 +720,6 @@ DWORD WINAPI ThreadGestorLetras(LPVOID param) {
         }
         ReleaseMutex(ctx->hMutexShm);
     }
-    Log(&ctx->csLog, _T("[LETRAS] ThreadGestorLetras a terminar."));
     return 0;
 }
 
@@ -779,7 +871,6 @@ DWORD WINAPI ThreadAdminArbitro(LPVOID param) {
             LogWarning(&ctx->csLog, _T("[ADMIN] Comando desconhecido: '%s'. Digite 'ajuda' para lista."), comando);
         }
     }
-    Log(&ctx->csLog, _T("[ADMIN] ThreadAdminArbitro a terminar."));
     return 0;
 }
 
@@ -1064,12 +1155,10 @@ DWORD WINAPI ThreadClienteConectado(LPVOID param) {
         free(args);
     }
 
-    Log(&ctx->csLog, _T("[CLIENT_THREAD %p] Thread terminada para '%s'."), hPipe, usernameEsteCliente[0] ? usernameEsteCliente : _T("(desconhecido/não juntou)"));
     return 0;
 }
 
 void RemoverJogador(SERVER_CONTEXT* ctx, const TCHAR* username, BOOL notificarClienteParaSair) {
-    Log(&ctx->csLog, _T("[JOGADOR] Tentando remover '%s'... (Notificar: %s)"), username, notificarClienteParaSair ? _T("SIM") : _T("NÃO"));
     int idxRemovido = -1;
     HANDLE hPipeDoRemovido = INVALID_HANDLE_VALUE;
     TCHAR nomeDoRemovido[MAX_USERNAME];
@@ -1079,7 +1168,7 @@ void RemoverJogador(SERVER_CONTEXT* ctx, const TCHAR* username, BOOL notificarCl
     for (DWORD i = 0; i < MAX_JOGADORES; ++i) {
         if (ctx->listaJogadores[i].ativo && _tcscmp(ctx->listaJogadores[i].username, username) == 0) {
             _tcscpy_s(nomeDoRemovido, MAX_USERNAME, ctx->listaJogadores[i].username);
-            Log(&ctx->csLog, _T("[JOGADOR] '%s' (idx %lu, pipe %p) encontrado para remoção."), nomeDoRemovido, i, ctx->listaJogadores[i].hPipe);
+
 
             ctx->listaJogadores[i].ativo = FALSE;
             hPipeDoRemovido = ctx->listaJogadores[i].hPipe;

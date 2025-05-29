@@ -450,12 +450,13 @@ DWORD WINAPI ThreadReceptorMensagensServidor(LPVOID param) {
     JOGOUI_CONTEXT* ctx = (JOGOUI_CONTEXT*)param;
     MESSAGE msgDoServidor;
     DWORD bytesLidos;
-    OVERLAPPED ovReadPipe; ZeroMemory(&ovReadPipe, sizeof(OVERLAPPED));
+    OVERLAPPED ovReadPipe;
+    ZeroMemory(&ovReadPipe, sizeof(OVERLAPPED));
     ovReadPipe.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
     if (ovReadPipe.hEvent == NULL) {
         LogErrorCliente(ctx, _T("TRA: Falha ao criar evento de leitura do pipe. Encerrando thread."));
-        if (ctx) ctx->clienteRodando = FALSE; // Signal main loop to stop
+        if (ctx) ctx->clienteRodando = FALSE;
         return 1;
     }
     LogCliente(ctx, _T("TRA: Thread Receptora de Mensagens iniciada."));
@@ -466,31 +467,35 @@ DWORD WINAPI ThreadReceptorMensagensServidor(LPVOID param) {
         DWORD dwError = GetLastError();
 
         if (!sucessoLeitura && dwError == ERROR_IO_PENDING) {
-            HANDLE handles[1] = { ovReadPipe.hEvent }; // Can add more handles here if needed (e.g. shutdown event)
-            DWORD waitRes = WaitForMultipleObjects(1, handles, FALSE, 500); // Timeout of 500ms
+            HANDLE handles[1] = { ovReadPipe.hEvent };
+            DWORD waitRes = WaitForMultipleObjects(1, handles, FALSE, 500);
 
-            if (!ctx->clienteRodando) break; // Check if client was signaled to stop during wait
+            if (!ctx->clienteRodando) break;
 
             if (waitRes == WAIT_TIMEOUT) {
-                continue; // Loop again to check clienteRodando and ReadFile
+                continue;
             }
-            else if (waitRes != WAIT_OBJECT_0) { // Error or other handle signaled
+            else if (waitRes != WAIT_OBJECT_0) {
                 if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TRA: Erro %lu ao esperar ReadFile do pipe."), GetLastError());
-                ctx->clienteRodando = FALSE; break;
+                ctx->clienteRodando = FALSE;
+                break;
             }
-            // I/O completed (event was signaled)
             if (!GetOverlappedResult(ctx->hPipeServidor, &ovReadPipe, &bytesLidos, FALSE)) {
                 if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TRA: GOR falhou após ReadFile do pipe: %lu."), GetLastError());
-                ctx->clienteRodando = FALSE; break;
+                ctx->clienteRodando = FALSE;
+                break;
             }
             sucessoLeitura = TRUE;
         }
         else if (!sucessoLeitura) {
-            if (ctx->clienteRodando) {
-                if (dwError == ERROR_BROKEN_PIPE) LogWarningCliente(ctx, _T("TRA: Pipe quebrado (servidor desconectou?)."));
-                else LogErrorCliente(ctx, _T("TRA: ReadFile falhou imediatamente: %lu."), dwError);
+            if (dwError == ERROR_BROKEN_PIPE || dwError == ERROR_PIPE_NOT_CONNECTED) {
+                if (ctx->clienteRodando) LogCliente(ctx, _T("TRA: Servidor encerrou a conexão (pipe quebrado)."));
+                ctx->clienteRodando = FALSE;
+                break;
             }
-            ctx->clienteRodando = FALSE; break;
+            if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TRA: ReadFile falhou imediatamente: %lu."), dwError);
+            ctx->clienteRodando = FALSE;
+            break;
         }
 
         if (!ctx->clienteRodando) break;
@@ -502,23 +507,40 @@ DWORD WINAPI ThreadReceptorMensagensServidor(LPVOID param) {
 
             if (_tcscmp(msgDoServidor.type, _T("JOIN_USER_EXISTS")) == 0 ||
                 _tcscmp(msgDoServidor.type, _T("JOIN_GAME_FULL")) == 0 ||
-                _tcscmp(msgDoServidor.type, _T("SHUTDOWN")) == 0) {
-                LogWarningCliente(ctx, _T("Recebida mensagem de terminação/erro do servidor: %s"), msgDoServidor.type);
-                ctx->clienteRodando = FALSE; // Signal main loop and this loop to stop
+                _tcscmp(msgDoServidor.type, _T("SHUTDOWN")) == 0 ||
+                _tcscmp(msgDoServidor.type, _T("GAME_WINNER")) == 0) {
+                if (_tcscmp(msgDoServidor.type, _T("SHUTDOWN")) == 0) {
+                    LogCliente(ctx, _T("Recebida mensagem de encerramento do servidor: %s"), msgDoServidor.type);
+                    ctx->clienteRodando = FALSE;
+                }
+                else if (_tcscmp(msgDoServidor.type, _T("GAME_WINNER")) == 0) {
+                    LogCliente(ctx, _T("Resultado do jogo: %s"), msgDoServidor.data);
+                }
+                else {
+                    LogWarningCliente(ctx, _T("Recebida mensagem de erro do servidor: %s"), msgDoServidor.type);
+                    ctx->clienteRodando = FALSE;
+                }
             }
-            // Could add prompt re-display logic here if desired after server message
-            // _tprintf(_T("%s> "), ctx->meuUsername); 
+            if (!ctx->clienteRodando) {
+                LeaveCriticalSection(&ctx->csConsoleCliente);
+                break;
+            }
+            _tprintf(_T("%s> "), ctx->meuUsername);
             fflush(stdout);
             LeaveCriticalSection(&ctx->csConsoleCliente);
-            if (!ctx->clienteRodando) break; // Check again if processing the message caused termination
-
         }
-        else if (sucessoLeitura && bytesLidos == 0) { // Pipe closed by server gracefully
-            if (ctx->clienteRodando) { LogWarningCliente(ctx, _T("TRA: Servidor fechou a conexão (EOF).")); ctx->clienteRodando = FALSE; }
+        else if (sucessoLeitura && bytesLidos == 0) {
+            if (ctx->clienteRodando) {
+                LogCliente(ctx, _T("TRA: Servidor fechou a conexão (EOF)."));
+                ctx->clienteRodando = FALSE;
+            }
             break;
         }
-        else if (bytesLidos != 0) { // Framing error or partial read (should not happen with PIPE_READMODE_MESSAGE)
-            if (ctx->clienteRodando) { LogErrorCliente(ctx, _T("TRA: Mensagem incompleta/errada do servidor (%lu bytes)."), bytesLidos); ctx->clienteRodando = FALSE; }
+        else if (bytesLidos != 0) {
+            if (ctx->clienteRodando) {
+                LogErrorCliente(ctx, _T("TRA: Mensagem incompleta/errada do servidor (%lu bytes)."), bytesLidos);
+                ctx->clienteRodando = FALSE;
+            }
             break;
         }
     }
