@@ -22,9 +22,9 @@
 #define MAX_LETRAS_TABULEIRO 12 // Limite físico do array de letras, conforme PDF
 
 // Valores padrão e de configuração do Registry (conforme PDF)
-#define REGISTRY_PATH_TP TEXT("Software\\TrabSO2_Palavras") // Caminho um pouco mais específico
-#define REG_MAXLETRAS_NOME TEXT("MAXLETRAS")
-#define REG_RITMO_NOME TEXT("RITMO")
+#define REGISTRY_PATH_TP _T("Software\\TrabSO2_Palavras") // Caminho um pouco mais específico
+#define REG_MAXLETRAS_NOME _T("MAXLETRAS")
+#define REG_RITMO_NOME _T("RITMO")
 #define DEFAULT_MAXLETRAS 6
 #define DEFAULT_RITMO_SEGUNDOS 3
 

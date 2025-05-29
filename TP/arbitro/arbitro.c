@@ -1,15 +1,14 @@
 ﻿#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
-#include <stdlib.h> // Para malloc, free, realloc, rand, srand, _tstoi
+#include <stdlib.h> 
 #include <tchar.h>
-#include <fcntl.h>   // Para _setmode
-#include <io.h>      // Para _setmode, _fileno
-#include <time.h>    // Para srand, time
+#include <fcntl.h>   
+#include <io.h>      
+#include <time.h>    
 
-#include "../Comum/compartilhado.h" // Ficheiro revisto
+#include "../Comum/compartilhado.h" // Ficheiro partilhado entre os programas
 
-// Definição manual de _countof se não estiver disponível
 #ifndef _countof
 #define _countof(array) (sizeof(array) / sizeof(array[0]))
 #endif
@@ -37,7 +36,7 @@ typedef struct {
     DWORD dwThreadIdCliente;
 } JOGADOR_INFO_ARBITRO;
 
-// ESTRUTURA PRINCIPAL PARA O ESTADO DO SERVIDOR
+// Estrutura principal para o estado do servidor (árbitro)
 typedef struct {
     JOGADOR_INFO_ARBITRO listaJogadores[MAX_JOGADORES];
     DWORD totalJogadoresAtivos;
@@ -95,14 +94,14 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     if (hMutexArbitroSingle == NULL) {
         _tprintf(_T("Erro ao criar Mutex do árbitro: %lu\n"), GetLastError());
-        return 1; // Erro fatal
+        return 1; 
     }
 
     // Verifica se o Mutex já existia (outra instância já está a correr)
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         _tprintf(_T("Outra instância do Árbitro já está a correr. Encerrando esta instância.\n"));
-        CloseHandle(hMutexArbitroSingle); // Fechar o handle que acabamos de abrir
-        return 0; // Terminar a aplicação sem erro
+        CloseHandle(hMutexArbitroSingle); 
+        return 0;
     }
 
     SERVER_CONTEXT serverCtx;
@@ -289,7 +288,6 @@ void EncerrarServidor(SERVER_CONTEXT* ctx) {
     Log(&ctx->csLog, _T("[ENCERRAR] Estado servidorEmExecucao: %s"),
         ctx->servidorEmExecucao ? _T("TRUE") : _T("FALSE"));
 
-    // Usar uma variável estática para evitar múltiplas execuções
     static BOOL jaExecutado = FALSE;
     if (jaExecutado) {
         Log(&ctx->csLog, _T("[ENCERRAR] Encerramento já foi executado anteriormente."));
@@ -297,10 +295,9 @@ void EncerrarServidor(SERVER_CONTEXT* ctx) {
     }
     jaExecutado = TRUE;
 
-    // Sempre definir como FALSE para parar novas operações
+    
     ctx->servidorEmExecucao = FALSE;
 
-    // SEMPRE determinar o vencedor, independentemente do estado anterior
     TCHAR vencedorUsername[MAX_USERNAME] = _T("");
     float maiorPontuacao = -1000.0f;
     BOOL empate = FALSE;
@@ -327,7 +324,7 @@ void EncerrarServidor(SERVER_CONTEXT* ctx) {
     }
     LeaveCriticalSection(&ctx->csListaJogadores);
 
-    // SEMPRE notificar sobre o resultado do jogo
+    // Notificar o resultado do joggo para os jogadores
     MESSAGE msgVencedor;
     ZeroMemory(&msgVencedor, sizeof(MESSAGE));
     _tcscpy_s(msgVencedor.type, _countof(msgVencedor.type), _T("GAME_WINNER"));
@@ -356,14 +353,13 @@ void EncerrarServidor(SERVER_CONTEXT* ctx) {
         Log(&ctx->csLog, _T("[ENCERRAR] Nenhum jogador ativo encontrado."));
     }
 
-    // SEMPRE enviar mensagem do vencedor
+ 
     Log(&ctx->csLog, _T("[ENCERRAR] Enviando resultado do jogo..."));
     NotificarTodosOsJogadores(ctx, &msgVencedor, NULL);
 
     // Aguardar para garantir que a mensagem seja processada
     Sleep(2000);
 
-    // SEMPRE enviar mensagem de shutdown
     MESSAGE msgShutdown;
     ZeroMemory(&msgShutdown, sizeof(MESSAGE));
     _tcscpy_s(msgShutdown.type, _countof(msgShutdown.type), _T("SHUTDOWN"));
@@ -407,6 +403,7 @@ void EncerrarServidor(SERVER_CONTEXT* ctx) {
 
     Log(&ctx->csLog, _T("[ENCERRAR] Recursos principais do servidor liberados."));
 }
+
 // Funções de Log
 void Log(CRITICAL_SECTION* csLogParam, const TCHAR* format, ...) {
     if (csLogParam == NULL || csLogParam->DebugInfo == NULL) {
@@ -514,11 +511,15 @@ void ConfigurarValoresRegistry(SERVER_CONTEXT* ctx) {
             LogError(&ctx->csLog, _T("[REG] Falha ao criar chave do Registry '%s': %lu"), REGISTRY_PATH_TP, GetLastError());
         }
     }
-    if (ctx->maxLetrasConfig > MAX_LETRAS_TABULEIRO) ctx->maxLetrasConfig = MAX_LETRAS_TABULEIRO;
-    if (ctx->maxLetrasConfig <= 0) ctx->maxLetrasConfig = DEFAULT_MAXLETRAS;
-    if (ctx->ritmoConfigSegundos <= 0) ctx->ritmoConfigSegundos = DEFAULT_RITMO_SEGUNDOS;
+    if (ctx->maxLetrasConfig > MAX_LETRAS_TABULEIRO) 
+        ctx->maxLetrasConfig = MAX_LETRAS_TABULEIRO;
+    if (ctx->maxLetrasConfig <= 0) 
+        ctx->maxLetrasConfig = DEFAULT_MAXLETRAS;
+    if (ctx->ritmoConfigSegundos <= 0) 
+        ctx->ritmoConfigSegundos = DEFAULT_RITMO_SEGUNDOS;
 }
 
+//Carregar e Liberar dicionário
 BOOL CarregarDicionarioServidor(SERVER_CONTEXT* ctx, const TCHAR* nomeArquivo) {
     DICIONARIO_ARBITRO* dict = &ctx->dicionario;
 
@@ -604,6 +605,7 @@ void LiberarDicionarioServidor(SERVER_CONTEXT* ctx) {
     }
 }
 
+//Inicializar e Limpar memória partilhada (SHM)
 BOOL InicializarMemoriaPartilhadaArbitro(SERVER_CONTEXT* ctx, int maxLetras) {
     if (maxLetras <= 0 || maxLetras > MAX_LETRAS_TABULEIRO) {
         LogError(&ctx->csLog, _T("[SHM] maxLetras inválido (%d) para inicializar memória partilhada."), maxLetras);
@@ -669,6 +671,7 @@ void LimparMemoriaPartilhadaArbitro(SERVER_CONTEXT* ctx) {
     Log(&ctx->csLog, _T("[SHM] Memória partilhada e objetos de sync limpos."));
 }
 
+//-------------------- THREADS --------------------
 DWORD WINAPI ThreadGestorLetras(LPVOID param) {
     THREAD_ARGS* args = (THREAD_ARGS*)param;
     SERVER_CONTEXT* ctx = args->serverCtx;

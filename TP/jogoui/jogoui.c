@@ -2,12 +2,11 @@
 #include <windows.h>
 #include <stdio.h>
 #include <tchar.h>
-#include <fcntl.h> // Para _setmode
-#include <io.h>    // Para _setmode, _fileno
+#include <fcntl.h> 
+#include <io.h>    
 
-#include "../Comum/compartilhado.h" // Ficheiro revisto
+#include "../Comum/compartilhado.h" // Ficheiro partilhado
 
-// Definição manual de _countof se não estiver disponível
 #ifndef _countof
 #define _countof(array) (sizeof(array) / sizeof(array[0]))
 #endif
@@ -15,7 +14,7 @@
 // Definição de Timeout
 #define IO_TIMEOUT 5000
 
-// --- JOGOUI Context Structure ---
+// Estrutura principal para o estado do cliente (JogoUI)
 typedef struct {
     TCHAR meuUsername[MAX_USERNAME];
     HANDLE hPipeServidor;
@@ -34,9 +33,7 @@ typedef struct {
     HANDLE hThreadMonitorShm;
 } JOGOUI_CONTEXT;
 
-// ==========================================================================================
-// PROTÓTIPOS DE FUNÇÕES INTERNAS (FORWARD DECLARATIONS, taking JOGOUI_CONTEXT*)
-// ==========================================================================================
+// Protótipos de funções internas
 void LogCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...);
 void LogErrorCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...);
 void LogWarningCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...);
@@ -50,9 +47,7 @@ void ProcessarInputUtilizador(JOGOUI_CONTEXT* ctx, const TCHAR* input);
 DWORD WINAPI ThreadReceptorMensagensServidor(LPVOID param);
 DWORD WINAPI ThreadMonitorSharedMemoryCliente(LPVOID param);
 
-// ==========================================================================================
-// FUNÇÃO PRINCIPAL - _tmain
-// ==========================================================================================
+// Função principal
 int _tmain(int argc, TCHAR* argv[]) {
 #ifdef UNICODE
     (void)_setmode(_fileno(stdin), _O_WTEXT);
@@ -60,9 +55,9 @@ int _tmain(int argc, TCHAR* argv[]) {
     (void)_setmode(_fileno(stderr), _O_WTEXT);
 #endif
 
-    JOGOUI_CONTEXT uiCtx; // Instance of the JogoUI context
+    JOGOUI_CONTEXT uiCtx; 
     ZeroMemory(&uiCtx, sizeof(JOGOUI_CONTEXT));
-    // Initialize handles to ensure they are invalid before use
+    
     uiCtx.hPipeServidor = INVALID_HANDLE_VALUE;
     uiCtx.hMapFileShmCliente = NULL;
     uiCtx.pDadosShmCliente = NULL;
@@ -117,10 +112,9 @@ int _tmain(int argc, TCHAR* argv[]) {
     uiCtx.hThreadMonitorShm = CreateThread(NULL, 0, ThreadMonitorSharedMemoryCliente, &uiCtx, 0, NULL);
     if (uiCtx.hThreadMonitorShm == NULL) {
         LogErrorCliente(&uiCtx, _T("Falha ao criar thread monitora de SHM. Atualizações do tabuleiro podem não funcionar."));
-        // Not necessarily fatal, but the board won't auto-update via this thread.
     }
 
-    TCHAR inputBuffer[MAX_WORD + 20]; // Local to _tmain
+    TCHAR inputBuffer[MAX_WORD + 20];
 
     EnterCriticalSection(&uiCtx.csConsoleCliente);
     MostrarEstadoJogoCliente(&uiCtx);
@@ -157,7 +151,6 @@ int _tmain(int argc, TCHAR* argv[]) {
     if (uiCtx.hThreadReceptorPipe != NULL) {
         if (WaitForSingleObject(uiCtx.hThreadReceptorPipe, 3000) == WAIT_TIMEOUT) {
             LogWarningCliente(&uiCtx, _T("Timeout ao aguardar thread receptora de pipe."));
-            // TerminateThread(uiCtx.hThreadReceptorPipe, 0); // Consider if necessary
         }
         CloseHandle(uiCtx.hThreadReceptorPipe);
         uiCtx.hThreadReceptorPipe = NULL;
@@ -165,7 +158,6 @@ int _tmain(int argc, TCHAR* argv[]) {
     if (uiCtx.hThreadMonitorShm != NULL) {
         if (WaitForSingleObject(uiCtx.hThreadMonitorShm, 2000) == WAIT_TIMEOUT) {
             LogWarningCliente(&uiCtx, _T("Timeout ao aguardar thread monitora de SHM."));
-            // TerminateThread(uiCtx.hThreadMonitorShm, 0); // Consider if necessary
         }
         CloseHandle(uiCtx.hThreadMonitorShm);
         uiCtx.hThreadMonitorShm = NULL;
@@ -179,17 +171,14 @@ int _tmain(int argc, TCHAR* argv[]) {
     return 0;
 }
 
-// ==========================================================================================
-// FUNÇÕES AUXILIARES E THREADS DO JOGOUI
-// ==========================================================================================
+// Funções auxiliares e Threads do JogoUI
 void LogCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...) {
-    if (ctx == NULL || ctx->csConsoleCliente.DebugInfo == NULL) { // Check if CS is initialized
+    if (ctx == NULL || ctx->csConsoleCliente.DebugInfo == NULL) { 
         TCHAR fbBuffer[1024];
         va_list fbArgs;
         va_start(fbArgs, format);
         _vstprintf_s(fbBuffer, _countof(fbBuffer), format, fbArgs);;
         va_end(fbArgs);
-        // Fallback if username in ctx is not yet set or ctx is null
         _tprintf_s(_T("[JOGOUI-NO_CS_CTX] %s\n"), fbBuffer);
         fflush(stdout);
         return;
@@ -296,12 +285,11 @@ BOOL AbrirRecursosCompartilhadosCliente(JOGOUI_CONTEXT* ctx) {
     }
     ctx->hMutexShmCliente = OpenMutex(SYNCHRONIZE, FALSE, MUTEX_SHARED_MEM);
     if (ctx->hMutexShmCliente == NULL) {
-        // This might not be fatal for a read-only client, but data might be inconsistent.
         LogWarningCliente(ctx, _T("Falha ao abrir mutex da SHM '%s': %lu. Leitura pode ter pequenas inconsistências visuais."), MUTEX_SHARED_MEM, GetLastError());
     }
 
     LogCliente(ctx, _T("Recursos compartilhados abertos com sucesso."));
-    if (ctx->pDadosShmCliente) { // Initialize last known generation
+    if (ctx->pDadosShmCliente) { 
         if (ctx->hMutexShmCliente) WaitForSingleObject(ctx->hMutexShmCliente, INFINITE);
         ctx->ultimaGeracaoConhecida = ctx->pDadosShmCliente->generationCount;
         if (ctx->hMutexShmCliente) ReleaseMutex(ctx->hMutexShmCliente);
@@ -373,11 +361,6 @@ void EnviarMensagemAoServidor(JOGOUI_CONTEXT* ctx, const MESSAGE* msg) {
 }
 
 void MostrarEstadoJogoCliente(JOGOUI_CONTEXT* ctx) {
-    // Note: This function is called from ThreadMonitorSharedMemoryCliente (which has the CS)
-    // and from _tmain (which also takes the CS before calling).
-    // So, the caller should handle Enter/LeaveCriticalSection for g_csConsoleCliente.
-    // The original code also had the CS inside, which could lead to deadlocks if called from a thread already holding it.
-    // For simplicity, assume caller handles CS for console output.
 
     if (ctx->pDadosShmCliente != NULL) {
         BOOL gotMutex = FALSE;
@@ -560,12 +543,11 @@ DWORD WINAPI ThreadMonitorSharedMemoryCliente(LPVOID param) {
     }
 
     while (ctx->clienteRodando) {
-        // Wait for the SHM update event or a timeout
-        DWORD waitResult = WaitForSingleObject(ctx->hEventoShmUpdateCliente, 1000); // Wait for 1 sec or event
+        DWORD waitResult = WaitForSingleObject(ctx->hEventoShmUpdateCliente, 1000);
 
-        if (!ctx->clienteRodando) break; // Exit if client is stopping
+        if (!ctx->clienteRodando) break; 
 
-        if (waitResult == WAIT_OBJECT_0) { // Event signaled
+        if (waitResult == WAIT_OBJECT_0) { 
             BOOL needsDisplay = FALSE;
             if (ctx->hMutexShmCliente) WaitForSingleObject(ctx->hMutexShmCliente, INFINITE);
             if (ctx->pDadosShmCliente->generationCount != ctx->ultimaGeracaoConhecida) {
@@ -576,19 +558,19 @@ DWORD WINAPI ThreadMonitorSharedMemoryCliente(LPVOID param) {
 
             if (needsDisplay) {
                 EnterCriticalSection(&ctx->csConsoleCliente);
-                MostrarEstadoJogoCliente(ctx); // This already handles its own mutex for SHM access for display
-                _tprintf(_T("%s> "), ctx->meuUsername); // Re-display prompt
+                MostrarEstadoJogoCliente(ctx); 
+                _tprintf(_T("%s> "), ctx->meuUsername); 
                 fflush(stdout);
                 LeaveCriticalSection(&ctx->csConsoleCliente);
             }
 
-            if (!ResetEvent(ctx->hEventoShmUpdateCliente)) { // Reset the event
-                // This error might occur if the event is closed while waiting, which shouldn't happen if cleanup is ordered.
+            if (!ResetEvent(ctx->hEventoShmUpdateCliente)) { 
+                
                 if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TSM: Falha ao resetar evento SHM: %lu"), GetLastError());
             }
         }
         else if (waitResult == WAIT_TIMEOUT) {
-            // Timeout occurred, could still check generation count just in case event was missed or not set
+            
             BOOL needsDisplayOnTimeout = FALSE;
             if (ctx->hMutexShmCliente) WaitForSingleObject(ctx->hMutexShmCliente, INFINITE);
             if (ctx->pDadosShmCliente && ctx->pDadosShmCliente->generationCount != ctx->ultimaGeracaoConhecida) {
@@ -605,9 +587,9 @@ DWORD WINAPI ThreadMonitorSharedMemoryCliente(LPVOID param) {
                 LeaveCriticalSection(&ctx->csConsoleCliente);
             }
         }
-        else { // Error waiting for event
+        else { 
             if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TSM: Erro %lu ao esperar evento SHM."), GetLastError());
-            Sleep(1000); // Prevent busy loop on persistent error
+            Sleep(1000); 
         }
     }
     LogCliente(ctx, _T("TSM: Thread Monitora de SHM a terminar."));
