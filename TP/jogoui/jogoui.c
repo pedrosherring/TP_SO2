@@ -4,6 +4,8 @@
 #include <tchar.h>
 #include <fcntl.h> 
 #include <io.h>    
+#include <ctype.h> 
+#include <wchar.h> 
 
 #include "../Comum/compartilhado.h" // Ficheiro partilhado
 
@@ -33,7 +35,7 @@ typedef struct {
     HANDLE hThreadMonitorShm;
 } JOGOUI_CONTEXT;
 
-// Protótipos de funções internas
+// Estruturas internas do árbitro
 void LogCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...);
 void LogErrorCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...);
 void LogWarningCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...);
@@ -47,7 +49,7 @@ void ProcessarInputUtilizador(JOGOUI_CONTEXT* ctx, const TCHAR* input);
 DWORD WINAPI ThreadReceptorMensagensServidor(LPVOID param);
 DWORD WINAPI ThreadMonitorSharedMemoryCliente(LPVOID param);
 
-// Função principal
+// Funo principal
 int _tmain(int argc, TCHAR* argv[]) {
 #ifdef UNICODE
     (void)_setmode(_fileno(stdin), _O_WTEXT);
@@ -55,9 +57,9 @@ int _tmain(int argc, TCHAR* argv[]) {
     (void)_setmode(_fileno(stderr), _O_WTEXT);
 #endif
 
-    JOGOUI_CONTEXT uiCtx; 
+    JOGOUI_CONTEXT uiCtx;
     ZeroMemory(&uiCtx, sizeof(JOGOUI_CONTEXT));
-    
+
     uiCtx.hPipeServidor = INVALID_HANDLE_VALUE;
     uiCtx.hMapFileShmCliente = NULL;
     uiCtx.pDadosShmCliente = NULL;
@@ -111,42 +113,113 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     uiCtx.hThreadMonitorShm = CreateThread(NULL, 0, ThreadMonitorSharedMemoryCliente, &uiCtx, 0, NULL);
     if (uiCtx.hThreadMonitorShm == NULL) {
-        LogErrorCliente(&uiCtx, _T("Falha ao criar thread monitora de SHM. Atualizações do tabuleiro podem não funcionar."));
+        LogErrorCliente(&uiCtx, _T("Falha ao criar thread monitora de SHM. Atualizaes do tabuleiro podem no funcionar."));
     }
 
-    TCHAR inputBuffer[MAX_WORD + 20];
+    HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
+    TCHAR inputLineBuffer[MAX_WORD + 20]; 
+    TCHAR displayPromptBuffer[MAX_USERNAME + 5]; 
+    int inputBufferPos = 0;
+    ZeroMemory(inputLineBuffer, sizeof(inputLineBuffer));
+    _sntprintf_s(displayPromptBuffer, _countof(displayPromptBuffer), _TRUNCATE, _T("%s> "), uiCtx.meuUsername);
 
     EnterCriticalSection(&uiCtx.csConsoleCliente);
     MostrarEstadoJogoCliente(&uiCtx);
-    _tprintf(_T("%s> "), uiCtx.meuUsername);
+    _tprintf(_T("%s"), displayPromptBuffer); 
     fflush(stdout);
     LeaveCriticalSection(&uiCtx.csConsoleCliente);
 
     while (uiCtx.clienteRodando) {
-        if (_fgetts(inputBuffer, _countof(inputBuffer), stdin) != NULL) {
-            inputBuffer[_tcscspn(inputBuffer, _T("\r\n"))] = _T('\0');
-            if (!uiCtx.clienteRodando) break;
+        INPUT_RECORD irInBuf[128];
+        DWORD numEventsRead = 0;
+        BOOL lineJustCompleted = FALSE;
 
-            ProcessarInputUtilizador(&uiCtx, inputBuffer);
+        if (WaitForSingleObject(hStdIn, 50) == WAIT_OBJECT_0) {
+            if (!PeekConsoleInput(hStdIn, irInBuf, 1, &numEventsRead)) {
+                if (uiCtx.clienteRodando) {
+                    DWORD peekError = GetLastError();
+                    if (peekError != 0 && peekError != ERROR_INVALID_HANDLE) {
+                        LogErrorCliente(&uiCtx, _T("Erro em PeekConsoleInput: %lu. Encerrando..."), peekError);
+                    }
+                    uiCtx.clienteRodando = FALSE;
+                }
+                break;
+            }
+
+            if (numEventsRead > 0) {
+                if (!ReadConsoleInput(hStdIn, irInBuf, numEventsRead, &numEventsRead)) {
+                    if (uiCtx.clienteRodando) {
+                        LogErrorCliente(&uiCtx, _T("Erro ao ler ReadConsoleInput: %lu. Encerrando..."), GetLastError());
+                        uiCtx.clienteRodando = FALSE;
+                    }
+                    break;
+                }
+
+                for (DWORD i = 0; i < numEventsRead; i++) {
+                    if (irInBuf[i].EventType == KEY_EVENT && irInBuf[i].Event.KeyEvent.bKeyDown) {
+                        TCHAR ch = 0;
+#ifdef UNICODE
+                        ch = irInBuf[i].Event.KeyEvent.uChar.UnicodeChar;
+#else
+                        ch = irInBuf[i].Event.KeyEvent.uChar.AsciiChar;
+#endif
+
+                        EnterCriticalSection(&uiCtx.csConsoleCliente);
+                        if (ch == _T('\r')) {
+                            _puttchar(_T('\n'));
+                            inputLineBuffer[inputBufferPos] = _T('\0');
+                            lineJustCompleted = TRUE;
+                        }
+                        else if (ch == _T('\b')) {
+                            if (inputBufferPos > 0) {
+                                inputBufferPos--;
+                                _tprintf(_T("\b \b"));
+                            }
+                        }
+                        else {
+                            BOOL isPrintable;
+#ifdef UNICODE
+                            isPrintable = iswprint(ch);
+#else
+                            isPrintable = isprint((unsigned char)ch);
+#endif
+
+                            if (isPrintable && inputBufferPos < (_countof(inputLineBuffer) - 1)) {
+                                inputLineBuffer[inputBufferPos++] = ch;
+                                _puttchar(ch);
+                            }
+                        }
+                        fflush(stdout);
+                        LeaveCriticalSection(&uiCtx.csConsoleCliente);
+
+                        if (lineJustCompleted) break;
+                    }
+                }
+            }
+        }
+
+        if (lineJustCompleted) {
+            if (uiCtx.clienteRodando) {
+                ProcessarInputUtilizador(&uiCtx, inputLineBuffer);
+            }
+            inputBufferPos = 0;
+            ZeroMemory(inputLineBuffer, sizeof(inputLineBuffer));
 
             if (uiCtx.clienteRodando) {
                 EnterCriticalSection(&uiCtx.csConsoleCliente);
-                _tprintf(_T("\n%s> "), uiCtx.meuUsername);
+                _tprintf(_T("%s"), displayPromptBuffer);
                 fflush(stdout);
                 LeaveCriticalSection(&uiCtx.csConsoleCliente);
             }
         }
-        else {
-            if (uiCtx.clienteRodando) {
-                LogErrorCliente(&uiCtx, _T("Erro ou EOF ao ler input. Encerrando..."));
-                uiCtx.clienteRodando = FALSE;
-            }
+
+        if (!uiCtx.clienteRodando) {
             break;
         }
     }
 
     LogCliente(&uiCtx, _T("Loop principal de input terminado. Aguardando threads..."));
-    if (uiCtx.hEventoShmUpdateCliente) SetEvent(uiCtx.hEventoShmUpdateCliente); // Signal threads to wake up and check clienteRodando
+    if (uiCtx.hEventoShmUpdateCliente) SetEvent(uiCtx.hEventoShmUpdateCliente);
 
     if (uiCtx.hThreadReceptorPipe != NULL) {
         if (WaitForSingleObject(uiCtx.hThreadReceptorPipe, 3000) == WAIT_TIMEOUT) {
@@ -165,15 +238,18 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     LimparRecursosCliente(&uiCtx);
     LogCliente(&uiCtx, _T("JogoUI para '%s' encerrado."), uiCtx.meuUsername);
+
+    EnterCriticalSection(&uiCtx.csConsoleCliente);
+    fflush(stdout);
+    LeaveCriticalSection(&uiCtx.csConsoleCliente);
+
     DeleteCriticalSection(&uiCtx.csConsoleCliente);
-    _tprintf(_T("\nDesconectado. Pressione Enter para sair...\n"));
-    (void)getchar();
     return 0;
 }
 
 // Funções auxiliares e Threads do JogoUI
 void LogCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...) {
-    if (ctx == NULL || ctx->csConsoleCliente.DebugInfo == NULL) { 
+    if (ctx == NULL || ctx->csConsoleCliente.DebugInfo == NULL) {
         TCHAR fbBuffer[1024];
         va_list fbArgs;
         va_start(fbArgs, format);
@@ -203,6 +279,7 @@ void LogCliente(JOGOUI_CONTEXT* ctx, const TCHAR* format, ...) {
 
     _tcscat_s(buffer, _countof(buffer), _T("\n"));
     _tprintf_s(buffer);
+
     fflush(stdout);
     va_end(args);
     LeaveCriticalSection(&ctx->csConsoleCliente);
@@ -252,15 +329,15 @@ BOOL ConectarAoServidorJogo(JOGOUI_CONTEXT* ctx) {
 
         DWORD dwError = GetLastError();
         if (dwError != ERROR_PIPE_BUSY && dwError != ERROR_FILE_NOT_FOUND) {
-            LogErrorCliente(ctx, _T("Erro não esperado ao conectar ao pipe: %lu"), dwError);
+            LogErrorCliente(ctx, _T("Erro no esperado ao conectar ao pipe: %lu"), dwError);
             return FALSE;
         }
-        LogWarningCliente(ctx, _T("Pipe ocupado ou não encontrado (tentativa %d/%d). Tentando novamente em 1s..."), tentativas + 1, MAX_TENTATIVAS_PIPE);
+        LogWarningCliente(ctx, _T("Pipe ocupado ou no encontrado (tentativa %d/%d). Tentando novamente em 1s..."), tentativas + 1, MAX_TENTATIVAS_PIPE);
         Sleep(1000);
         tentativas++;
     }
-    if (!ctx->clienteRodando) LogCliente(ctx, _T("Conexão cancelada durante tentativas."));
-    else LogErrorCliente(ctx, _T("Não foi possível conectar ao servidor após %d tentativas."), MAX_TENTATIVAS_PIPE);
+    if (!ctx->clienteRodando) LogCliente(ctx, _T("Conexo cancelada durante tentativas."));
+    else LogErrorCliente(ctx, _T("No foi possvel conectar ao servidor aps %d tentativas."), MAX_TENTATIVAS_PIPE);
     return FALSE;
 }
 
@@ -285,11 +362,11 @@ BOOL AbrirRecursosCompartilhadosCliente(JOGOUI_CONTEXT* ctx) {
     }
     ctx->hMutexShmCliente = OpenMutex(SYNCHRONIZE, FALSE, MUTEX_SHARED_MEM);
     if (ctx->hMutexShmCliente == NULL) {
-        LogWarningCliente(ctx, _T("Falha ao abrir mutex da SHM '%s': %lu. Leitura pode ter pequenas inconsistências visuais."), MUTEX_SHARED_MEM, GetLastError());
+        LogWarningCliente(ctx, _T("Falha ao abrir mutex da SHM '%s': %lu. Leitura pode ter pequenas inconsistncias visuais."), MUTEX_SHARED_MEM, GetLastError());
     }
 
     LogCliente(ctx, _T("Recursos compartilhados abertos com sucesso."));
-    if (ctx->pDadosShmCliente) { 
+    if (ctx->pDadosShmCliente) {
         if (ctx->hMutexShmCliente) WaitForSingleObject(ctx->hMutexShmCliente, INFINITE);
         ctx->ultimaGeracaoConhecida = ctx->pDadosShmCliente->generationCount;
         if (ctx->hMutexShmCliente) ReleaseMutex(ctx->hMutexShmCliente);
@@ -323,14 +400,13 @@ void LimparRecursosCliente(JOGOUI_CONTEXT* ctx) {
 
 void EnviarMensagemAoServidor(JOGOUI_CONTEXT* ctx, const MESSAGE* msg) {
     if (ctx->hPipeServidor == INVALID_HANDLE_VALUE || !ctx->clienteRodando) {
-        LogErrorCliente(ctx, _T("Não é possível enviar mensagem: pipe inválido ou cliente não está rodando."));
         return;
     }
     DWORD bytesEscritos;
     OVERLAPPED ovWrite; ZeroMemory(&ovWrite, sizeof(OVERLAPPED));
     ovWrite.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (ovWrite.hEvent == NULL) {
-        LogErrorCliente(ctx, _T("Falha ao criar evento para WriteFile. Mensagem tipo '%s' não enviada."), msg->type);
+        LogErrorCliente(ctx, _T("Falha ao criar evento para WriteFile. Mensagem tipo '%s' no enviada."), msg->type);
         return;
     }
 
@@ -344,55 +420,56 @@ void EnviarMensagemAoServidor(JOGOUI_CONTEXT* ctx, const MESSAGE* msg) {
             else {
                 if (ctx->clienteRodando) LogErrorCliente(ctx, _T("Timeout ao enviar mensagem tipo '%s'. Cancelando IO."), msg->type);
                 CancelIoEx(ctx->hPipeServidor, &ovWrite);
-                if (GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_PIPE_NOT_CONNECTED) ctx->clienteRodando = FALSE;
+                if (GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_PIPE_NOT_CONNECTED) {
+                    if (ctx->clienteRodando) ctx->clienteRodando = FALSE;
+                }
             }
         }
         else {
             if (ctx->clienteRodando) LogErrorCliente(ctx, _T("Falha ao enviar mensagem tipo '%s' para o servidor: %lu"), msg->type, GetLastError());
-            if (GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_PIPE_NOT_CONNECTED) ctx->clienteRodando = FALSE;
-        }
-    }
-    else {
-        if (!GetOverlappedResult(ctx->hPipeServidor, &ovWrite, &bytesEscritos, FALSE) || bytesEscritos != sizeof(MESSAGE)) {
-            if (ctx->clienteRodando) LogErrorCliente(ctx, _T("WriteFile síncrono (com overlapped) falhou ou bytes incorretos (%lu) para msg tipo '%s'."), bytesEscritos, msg->type);
+            if (GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_PIPE_NOT_CONNECTED) {
+                if (ctx->clienteRodando) ctx->clienteRodando = FALSE;
+            }
         }
     }
     CloseHandle(ovWrite.hEvent);
 }
 
 void MostrarEstadoJogoCliente(JOGOUI_CONTEXT* ctx) {
-
     if (ctx->pDadosShmCliente != NULL) {
         BOOL gotMutex = FALSE;
         if (ctx->hMutexShmCliente) {
-            if (WaitForSingleObject(ctx->hMutexShmCliente, 100) == WAIT_OBJECT_0) { // Short timeout
+            if (WaitForSingleObject(ctx->hMutexShmCliente, 100) == WAIT_OBJECT_0) {
                 gotMutex = TRUE;
-            }
-            else {
-                LogWarningCliente(ctx, _T("Timeout ao obter mutex da SHM para mostrar estado. Dados podem estar ligeiramente desatualizados."));
             }
         }
 
         _tprintf(_T("\n====================================\n"));
         _tprintf(_T("Letras: "));
-        for (int i = 0; i < ctx->pDadosShmCliente->numMaxLetrasAtual; ++i) {
-            _tprintf(_T("%c "), ctx->pDadosShmCliente->letrasVisiveis[i]);
+        int maxLetras = 0;
+        if (ctx->pDadosShmCliente) {
+            maxLetras = ctx->pDadosShmCliente->numMaxLetrasAtual;
+            for (int i = 0; i < maxLetras && i < MAX_LETRAS_TABULEIRO; ++i) {
+                _tprintf(_T("%c "), ctx->pDadosShmCliente->letrasVisiveis[i]);
+            }
         }
         _tprintf(_T("\n"));
 
-        if (ctx->pDadosShmCliente->ultimaPalavraIdentificada[0] != _T('\0')) {
+        if (ctx->pDadosShmCliente && ctx->pDadosShmCliente->ultimaPalavraIdentificada[0] != _T('\0')) {
             _tprintf(_T("Última palavra por %s: %s (+%d pts)\n"),
                 ctx->pDadosShmCliente->usernameUltimaPalavra,
                 ctx->pDadosShmCliente->ultimaPalavraIdentificada,
                 ctx->pDadosShmCliente->pontuacaoUltimaPalavra);
         }
-        _tprintf(_T("Jogo Ativo: %s\n"), ctx->pDadosShmCliente->jogoAtivo ? _T("Sim") : _T("Não"));
+        if (ctx->pDadosShmCliente) {
+            _tprintf(_T("Jogo Ativo: %s\n"), ctx->pDadosShmCliente->jogoAtivo ? _T("Sim") : _T("No"));
+        }
         _tprintf(_T("====================================\n"));
 
         if (gotMutex && ctx->hMutexShmCliente) ReleaseMutex(ctx->hMutexShmCliente);
     }
     else {
-        _tprintf(_T("\n[AVISO] Memória partilhada não disponível.\n"));
+        _tprintf(_T("\n[AVISO] Memória partilhada no disponvel.\n"));
     }
     fflush(stdout);
 }
@@ -401,6 +478,8 @@ void ProcessarInputUtilizador(JOGOUI_CONTEXT* ctx, const TCHAR* input) {
     MESSAGE msgParaServidor;
     ZeroMemory(&msgParaServidor, sizeof(MESSAGE));
     _tcscpy_s(msgParaServidor.username, MAX_USERNAME, ctx->meuUsername);
+
+    if (!ctx->clienteRodando) return;
 
     if (_tcslen(input) == 0) {
         return;
@@ -451,7 +530,7 @@ DWORD WINAPI ThreadReceptorMensagensServidor(LPVOID param) {
 
         if (!sucessoLeitura && dwError == ERROR_IO_PENDING) {
             HANDLE handles[1] = { ovReadPipe.hEvent };
-            DWORD waitRes = WaitForMultipleObjects(1, handles, FALSE, 500);
+            DWORD waitRes = WaitForMultipleObjects(1, handles, FALSE, 250);
 
             if (!ctx->clienteRodando) break;
 
@@ -459,25 +538,34 @@ DWORD WINAPI ThreadReceptorMensagensServidor(LPVOID param) {
                 continue;
             }
             else if (waitRes != WAIT_OBJECT_0) {
-                if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TRA: Erro %lu ao esperar ReadFile do pipe."), GetLastError());
-                ctx->clienteRodando = FALSE;
+                if (ctx->clienteRodando) {
+                    LogErrorCliente(ctx, _T("TRA: Erro %lu ao esperar ReadFile do pipe."), GetLastError());
+                    ctx->clienteRodando = FALSE;
+                }
                 break;
             }
             if (!GetOverlappedResult(ctx->hPipeServidor, &ovReadPipe, &bytesLidos, FALSE)) {
-                if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TRA: GOR falhou após ReadFile do pipe: %lu."), GetLastError());
-                ctx->clienteRodando = FALSE;
+                if (ctx->clienteRodando) {
+                    LogErrorCliente(ctx, _T("TRA: GOR falhou aps ReadFile do pipe: %lu."), GetLastError());
+                    if (GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_PIPE_NOT_CONNECTED) {
+                        LogCliente(ctx, _T("TRA: Pipe quebrado detectado em GOR."));
+                    }
+                    ctx->clienteRodando = FALSE;
+                }
                 break;
             }
             sucessoLeitura = TRUE;
         }
         else if (!sucessoLeitura) {
-            if (dwError == ERROR_BROKEN_PIPE || dwError == ERROR_PIPE_NOT_CONNECTED) {
-                if (ctx->clienteRodando) LogCliente(ctx, _T("TRA: Servidor encerrou a conexão (pipe quebrado)."));
+            if (ctx->clienteRodando) {
+                if (dwError == ERROR_BROKEN_PIPE || dwError == ERROR_PIPE_NOT_CONNECTED) {
+                    LogCliente(ctx, _T("TRA: Servidor encerrou a conexo (pipe quebrado)."));
+                }
+                else {
+                    LogErrorCliente(ctx, _T("TRA: ReadFile falhou imediatamente: %lu."), dwError);
+                }
                 ctx->clienteRodando = FALSE;
-                break;
             }
-            if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TRA: ReadFile falhou imediatamente: %lu."), dwError);
-            ctx->clienteRodando = FALSE;
             break;
         }
 
@@ -488,33 +576,34 @@ DWORD WINAPI ThreadReceptorMensagensServidor(LPVOID param) {
             _tprintf(_T("\n[SERVIDOR->%s] %s: %s (Pontos na msg: %d)\n"),
                 ctx->meuUsername, msgDoServidor.type, msgDoServidor.data, msgDoServidor.pontos);
 
+            BOOL clientShouldStop = FALSE;
             if (_tcscmp(msgDoServidor.type, _T("JOIN_USER_EXISTS")) == 0 ||
-                _tcscmp(msgDoServidor.type, _T("JOIN_GAME_FULL")) == 0 ||
-                _tcscmp(msgDoServidor.type, _T("SHUTDOWN")) == 0 ||
-                _tcscmp(msgDoServidor.type, _T("GAME_WINNER")) == 0) {
-                if (_tcscmp(msgDoServidor.type, _T("SHUTDOWN")) == 0) {
-                    LogCliente(ctx, _T("Recebida mensagem de encerramento do servidor: %s"), msgDoServidor.type);
-                    ctx->clienteRodando = FALSE;
-                }
-                else if (_tcscmp(msgDoServidor.type, _T("GAME_WINNER")) == 0) {
-                    LogCliente(ctx, _T("Resultado do jogo: %s"), msgDoServidor.data);
-                }
-                else {
-                    LogWarningCliente(ctx, _T("Recebida mensagem de erro do servidor: %s"), msgDoServidor.type);
-                    ctx->clienteRodando = FALSE;
-                }
+                _tcscmp(msgDoServidor.type, _T("JOIN_GAME_FULL")) == 0) {
+                LogWarningCliente(ctx, _T("Recebida mensagem de erro do servidor: %s (%s)"), msgDoServidor.type, msgDoServidor.data);
+                ctx->clienteRodando = FALSE; clientShouldStop = TRUE;
             }
-            if (!ctx->clienteRodando) {
+            else if (_tcscmp(msgDoServidor.type, _T("SHUTDOWN")) == 0) {
+                LogCliente(ctx, _T("Recebida mensagem de encerramento do servidor: %s"), msgDoServidor.data);
+                ctx->clienteRodando = FALSE; clientShouldStop = TRUE;
+            }
+            else if (_tcscmp(msgDoServidor.type, _T("GAME_WINNER")) == 0) {
+                LogCliente(ctx, _T("Resultado do jogo: %s"), msgDoServidor.data);
+            }
+
+            if (clientShouldStop) {
                 LeaveCriticalSection(&ctx->csConsoleCliente);
                 break;
             }
-            _tprintf(_T("%s> "), ctx->meuUsername);
+
+            TCHAR currentPrompt[MAX_USERNAME + 5];
+            _sntprintf_s(currentPrompt, _countof(currentPrompt), _TRUNCATE, _T("%s> "), ctx->meuUsername);
+            _tprintf(_T("%s"), currentPrompt);
             fflush(stdout);
             LeaveCriticalSection(&ctx->csConsoleCliente);
         }
         else if (sucessoLeitura && bytesLidos == 0) {
             if (ctx->clienteRodando) {
-                LogCliente(ctx, _T("TRA: Servidor fechou a conexão (EOF)."));
+                LogCliente(ctx, _T("TRA: Servidor fechou a conexo (EOF)."));
                 ctx->clienteRodando = FALSE;
             }
             break;
@@ -538,19 +627,25 @@ DWORD WINAPI ThreadMonitorSharedMemoryCliente(LPVOID param) {
     LogCliente(ctx, _T("TSM: Thread Monitora de SHM iniciada."));
 
     if (ctx->hEventoShmUpdateCliente == NULL || ctx->pDadosShmCliente == NULL) {
-        LogErrorCliente(ctx, _T("TSM: Evento ou SHM não inicializados na thread. Encerrando thread."));
+        LogErrorCliente(ctx, _T("TSM: Evento ou SHM no inicializados na thread. Encerrando thread."));
         return 1;
     }
 
     while (ctx->clienteRodando) {
-        DWORD waitResult = WaitForSingleObject(ctx->hEventoShmUpdateCliente, 1000);
+        DWORD waitResult = WaitForSingleObject(ctx->hEventoShmUpdateCliente, 250);
 
-        if (!ctx->clienteRodando) break; 
+        if (!ctx->clienteRodando) break;
 
-        if (waitResult == WAIT_OBJECT_0) { 
-            BOOL needsDisplay = FALSE;
-            if (ctx->hMutexShmCliente) WaitForSingleObject(ctx->hMutexShmCliente, INFINITE);
-            if (ctx->pDadosShmCliente->generationCount != ctx->ultimaGeracaoConhecida) {
+        BOOL needsDisplay = FALSE;
+        if (waitResult == WAIT_OBJECT_0 || waitResult == WAIT_TIMEOUT) {
+            if (ctx->hMutexShmCliente) {
+                if (WaitForSingleObject(ctx->hMutexShmCliente, 100) != WAIT_OBJECT_0) {
+                    if (waitResult == WAIT_OBJECT_0) ResetEvent(ctx->hEventoShmUpdateCliente);
+                    continue;
+                }
+            }
+
+            if (ctx->pDadosShmCliente && ctx->pDadosShmCliente->generationCount != ctx->ultimaGeracaoConhecida) {
                 ctx->ultimaGeracaoConhecida = ctx->pDadosShmCliente->generationCount;
                 needsDisplay = TRUE;
             }
@@ -558,38 +653,25 @@ DWORD WINAPI ThreadMonitorSharedMemoryCliente(LPVOID param) {
 
             if (needsDisplay) {
                 EnterCriticalSection(&ctx->csConsoleCliente);
-                MostrarEstadoJogoCliente(ctx); 
-                _tprintf(_T("%s> "), ctx->meuUsername); 
-                fflush(stdout);
-                LeaveCriticalSection(&ctx->csConsoleCliente);
-            }
-
-            if (!ResetEvent(ctx->hEventoShmUpdateCliente)) { 
-                
-                if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TSM: Falha ao resetar evento SHM: %lu"), GetLastError());
-            }
-        }
-        else if (waitResult == WAIT_TIMEOUT) {
-            
-            BOOL needsDisplayOnTimeout = FALSE;
-            if (ctx->hMutexShmCliente) WaitForSingleObject(ctx->hMutexShmCliente, INFINITE);
-            if (ctx->pDadosShmCliente && ctx->pDadosShmCliente->generationCount != ctx->ultimaGeracaoConhecida) {
-                ctx->ultimaGeracaoConhecida = ctx->pDadosShmCliente->generationCount;
-                needsDisplayOnTimeout = TRUE;
-            }
-            if (ctx->hMutexShmCliente) ReleaseMutex(ctx->hMutexShmCliente);
-
-            if (needsDisplayOnTimeout) {
-                EnterCriticalSection(&ctx->csConsoleCliente);
                 MostrarEstadoJogoCliente(ctx);
-                _tprintf(_T("%s> "), ctx->meuUsername);
+
+                TCHAR currentPrompt[MAX_USERNAME + 5];
+                _sntprintf_s(currentPrompt, _countof(currentPrompt), _TRUNCATE, _T("%s> "), ctx->meuUsername);
+                _tprintf(_T("%s"), currentPrompt);
+
                 fflush(stdout);
                 LeaveCriticalSection(&ctx->csConsoleCliente);
             }
+
+            if (waitResult == WAIT_OBJECT_0) {
+                if (!ResetEvent(ctx->hEventoShmUpdateCliente)) {
+                    if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TSM: Falha ao resetar evento SHM: %lu"), GetLastError());
+                }
+            }
         }
-        else { 
+        else {
             if (ctx->clienteRodando) LogErrorCliente(ctx, _T("TSM: Erro %lu ao esperar evento SHM."), GetLastError());
-            Sleep(1000); 
+            Sleep(1000);
         }
     }
     LogCliente(ctx, _T("TSM: Thread Monitora de SHM a terminar."));
