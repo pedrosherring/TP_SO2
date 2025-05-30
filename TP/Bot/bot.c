@@ -1,5 +1,4 @@
-﻿
-#include "bot.h" 
+﻿#include "bot.h" 
 
 #include <stdio.h>   
 #include <stdlib.h>  
@@ -7,7 +6,6 @@
 #include <io.h>      
 #include <time.h>    
 
-// --- Main Function ---
 int _tmain(int argc, TCHAR* argv[]) {
 #ifdef UNICODE
     (void)_setmode(_fileno(stdout), _O_WTEXT);
@@ -35,10 +33,10 @@ int _tmain(int argc, TCHAR* argv[]) {
     InitializeCriticalSection(&botCtx.csBotConsole);
     InitializeCriticalSection(&botCtx.csBotData);
 
-    LogBot(&botCtx, _T("Bot '%s' a iniciar com tempo de rea��o de %d segundos..."), botCtx.botUsername, botCtx.reactionTimeSeconds);
+    LogBot(&botCtx, _T("Bot '%s' a iniciar com tempo de reação de %d segundos..."), botCtx.botUsername, botCtx.reactionTimeSeconds);
 
     if (!CarregarDicionarioBot(&botCtx, _T("..\\..\\Comum\\dicionario.txt"))) {
-        LogErrorBot(&botCtx, _T("Falha ao carregar dicion�rio do bot. Encerrando."));
+        LogErrorBot(&botCtx, _T("Falha ao carregar dicionário do bot. Encerrando."));
         DeleteCriticalSection(&botCtx.csBotData);
         DeleteCriticalSection(&botCtx.csBotConsole);
         return 1;
@@ -95,8 +93,8 @@ int _tmain(int argc, TCHAR* argv[]) {
 
     if (botCtx.hThreadReceptorPipeBot != NULL) {
         if (WaitForSingleObject(botCtx.hThreadReceptorPipeBot, 3000) == WAIT_TIMEOUT) {
-            LogWarningBot(&botCtx, _T("Timeout ao aguardar thread receptora de pipe. For�ando termina��o da thread."));
-            TerminateThread(botCtx.hThreadReceptorPipeBot, 0); // Use with caution
+            LogWarningBot(&botCtx, _T("Timeout ao aguardar thread receptora de pipe. Forçando terminação da thread."));
+            TerminateThread(botCtx.hThreadReceptorPipeBot, 0);
         }
         CloseHandle(botCtx.hThreadReceptorPipeBot);
         botCtx.hThreadReceptorPipeBot = NULL;
@@ -111,7 +109,7 @@ int _tmain(int argc, TCHAR* argv[]) {
     return 0;
 }
 
-// --- Logging Functions ---
+
 void LogBot(BOT_CONTEXT* ctx, const TCHAR* format, ...) {
 
     if (ctx == NULL || ctx->csBotConsole.DebugInfo == NULL) {
@@ -184,8 +182,8 @@ BOOL ProcessarArgumentosBot(BOT_CONTEXT* ctx, int argc, TCHAR* argv[]) {
     _tcscpy_s(ctx->botUsername, MAX_USERNAME, argv[1]);
     ctx->reactionTimeSeconds = _tstoi(argv[2]);
 
-    if (ctx->reactionTimeSeconds <= 0) {
-        _tprintf(_T("Tempo de rea��o inv�lido. Deve ser > 0.\n"));
+    if (ctx->reactionTimeSeconds < 5 || ctx->reactionTimeSeconds > 30) {
+        _tprintf(_T("Tempo de reação inválido. Deve ser entre 5 e 30.\n"));
         return FALSE;
     }
     return TRUE;
@@ -197,26 +195,26 @@ BOOL CarregarDicionarioBot(BOT_CONTEXT* ctx, const TCHAR* nomeArquivo) {
 
     if (_tfopen_s(&arquivo, nomeArquivo, _T("rt, ccs=UTF-8")) != 0 || arquivo == NULL) {
 
-        LogErrorBot(ctx, _T("Erro ao abrir ficheiro de dicion�rio do bot '%s'. Verifique se o arquivo existe e o caminho está correto."), nomeArquivo);
+        LogErrorBot(ctx, _T("Erro ao abrir ficheiro de dicionário do bot '%s'. Verifique se o arquivo existe e o caminho está correto."), nomeArquivo);
         return FALSE;
     }
 
-    TCHAR linha[MAX_WORD + 2]; // +2 for potential \r\n and null terminator
+    TCHAR linha[MAX_WORD + 2]; 
     ctx->totalPalavrasBotDicionario = 0;
 
     while (ctx->totalPalavrasBotDicionario < MAX_BOT_DICT_WORDS && _fgetts(linha, _countof(linha), arquivo)) {
         size_t len = _tcslen(linha);
-        // Trim newline characters from the end
+        
         while (len > 0 && (linha[len - 1] == _T('\n') || linha[len - 1] == _T('\r'))) {
             linha[len - 1] = _T('\0');
             len--;
         }
 
-        if (len == 0 || len > MAX_WORD) continue; // Skip empty or too long words
+        if (len == 0 || len > MAX_WORD) continue; 
 
         ctx->botDicionario[ctx->totalPalavrasBotDicionario] = _tcsdup(linha);
         if (!ctx->botDicionario[ctx->totalPalavrasBotDicionario]) {
-            LogErrorBot(ctx, _T("Falha ao alocar mem�ria para palavra do dicion�rio: '%s'"), linha);
+            LogErrorBot(ctx, _T("Falha ao alocar memória para palavra do dicionário: '%s'"), linha);
             fclose(arquivo);
 
             for (DWORD i = 0; i < ctx->totalPalavrasBotDicionario; i++) {
@@ -232,9 +230,9 @@ BOOL CarregarDicionarioBot(BOT_CONTEXT* ctx, const TCHAR* nomeArquivo) {
     }
 
     fclose(arquivo);
-    LogBot(ctx, _T("Dicion�rio do bot carregado com %lu palavras."), ctx->totalPalavrasBotDicionario);
+    LogBot(ctx, _T("Dicionário do bot carregado com %lu palavras."), ctx->totalPalavrasBotDicionario);
     if (ctx->totalPalavrasBotDicionario == 0) {
-        LogWarningBot(ctx, _T("O dicion�rio do bot est� vazio! O bot n�o poder� jogar."));
+        LogWarningBot(ctx, _T("O dicionário do bot está vazio! O bot não poderá jogar."));
     }
     return TRUE;
 }
@@ -245,10 +243,9 @@ void LiberarDicionarioBot(BOT_CONTEXT* ctx) {
         ctx->botDicionario[i] = NULL;
     }
     ctx->totalPalavrasBotDicionario = 0;
-    LogBot(ctx, _T("Dicion�rio do bot libertado."));
+    LogBot(ctx, _T("Dicionário do bot libertado."));
 }
 
-// --- IPC Client Functions ---
 BOOL ConectarAoServidorBot(BOT_CONTEXT* ctx) {
     int tentativas = 0;
     const int MAX_TENTATIVAS_PIPE = 5;
@@ -264,7 +261,7 @@ BOOL ConectarAoServidorBot(BOT_CONTEXT* ctx) {
             NULL);
 
         if (ctx->hPipeServidorBot != INVALID_HANDLE_VALUE) {
-            // Set pipe to message-read mode
+
             DWORD dwMode = PIPE_READMODE_MESSAGE;
             if (!SetNamedPipeHandleState(ctx->hPipeServidorBot, &dwMode, NULL, NULL)) {
                 LogErrorBot(ctx, _T("Falha ao definir modo do pipe para mensagem: %lu"), GetLastError());
@@ -278,16 +275,16 @@ BOOL ConectarAoServidorBot(BOT_CONTEXT* ctx) {
 
         DWORD dwError = GetLastError();
         if (dwError != ERROR_PIPE_BUSY && dwError != ERROR_FILE_NOT_FOUND) {
-            LogErrorBot(ctx, _T("Erro n�o esperado ao conectar ao pipe: %lu"), dwError);
+            LogErrorBot(ctx, _T("Erro não esperado ao conectar ao pipe: %lu"), dwError);
             return FALSE;
         }
 
-        LogWarningBot(ctx, _T("Pipe ocupado ou n�o encontrado (tentativa %d/%d). Tentando novamente em 1s..."), tentativas + 1, MAX_TENTATIVAS_PIPE);
+        LogWarningBot(ctx, _T("Pipe ocupado ou não encontrado (tentativa %d/%d). Tentando novamente em 1s..."), tentativas + 1, MAX_TENTATIVAS_PIPE);
         Sleep(1000);
         tentativas++;
     }
-    if (!ctx->botRodando) LogBot(ctx, _T("Conex�o cancelada durante tentativas."));
-    else LogErrorBot(ctx, _T("N�o foi poss�vel conectar ao servidor ap�s %d tentativas."), MAX_TENTATIVAS_PIPE);
+    if (!ctx->botRodando) LogBot(ctx, _T("Conexão cancelada durante tentativas."));
+    else LogErrorBot(ctx, _T("Não foi possível conectar ao servidor após %d tentativas."), MAX_TENTATIVAS_PIPE);
     return FALSE;
 }
 
@@ -333,7 +330,7 @@ BOOL AbrirRecursosCompartilhadosBot(BOT_CONTEXT* ctx) {
         MUTEX_SHARED_MEM);
 
     if (ctx->hMutexShmBot == NULL) {
-        LogErrorBot(ctx, _T("Falha ao abrir mutex da SHM '%s': %lu. Isso � cr�tico para o bot."), MUTEX_SHARED_MEM, GetLastError());
+        LogErrorBot(ctx, _T("Falha ao abrir mutex da SHM '%s': %lu. Isso é crítico para o bot."), MUTEX_SHARED_MEM, GetLastError());
         CloseHandle(ctx->hEventoShmUpdateBot); ctx->hEventoShmUpdateBot = NULL;
         UnmapViewOfFile(ctx->pDadosShmBot); ctx->pDadosShmBot = NULL;
         CloseHandle(ctx->hMapFileShmBot); ctx->hMapFileShmBot = NULL;
@@ -384,25 +381,25 @@ void LimparRecursosBot(BOT_CONTEXT* ctx) {
 
 void EnviarMensagemAoServidorBot(BOT_CONTEXT* ctx, const MESSAGE* msg) {
     if (ctx->hPipeServidorBot == INVALID_HANDLE_VALUE || !ctx->botRodando) {
-        LogWarningBot(ctx, _T("Tentativa de enviar msg '%s' com pipe inv�lido ou bot n�o rodando."), msg->type);
+        LogWarningBot(ctx, _T("Tentativa de enviar msg '%s' com pipe inválido ou bot não rodando."), msg->type);
         return;
     }
 
     DWORD bytesEscritos;
     OVERLAPPED ovWrite; ZeroMemory(&ovWrite, sizeof(OVERLAPPED));
-    ovWrite.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL); // Manual-reset, initially non-signaled
+    ovWrite.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL); 
 
     if (ovWrite.hEvent == NULL) {
-        LogErrorBot(ctx, _T("Falha ao criar evento para WriteFile. Mensagem tipo '%s' n�o enviada."), msg->type);
+        LogErrorBot(ctx, _T("Falha ao criar evento para WriteFile. Mensagem tipo '%s' não enviada."), msg->type);
         return;
     }
 
     if (!WriteFile(ctx->hPipeServidorBot, msg, sizeof(MESSAGE), &bytesEscritos, &ovWrite)) {
         if (GetLastError() == ERROR_IO_PENDING) {
 
-            if (WaitForSingleObject(ovWrite.hEvent, 5000) == WAIT_OBJECT_0) { // 5-second timeout
+            if (WaitForSingleObject(ovWrite.hEvent, 5000) == WAIT_OBJECT_0) { 
 
-                if (!GetOverlappedResult(ctx->hPipeServidorBot, &ovWrite, &bytesEscritos, FALSE) || // FALSE = don't wait
+                if (!GetOverlappedResult(ctx->hPipeServidorBot, &ovWrite, &bytesEscritos, FALSE) || 
                     bytesEscritos != sizeof(MESSAGE)) {
                     if (ctx->botRodando) LogErrorBot(ctx, _T("GetOverlappedResult falhou ou bytes incorretos (%lu) para msg tipo '%s': %lu"), bytesEscritos, msg->type, GetLastError());
                 }
@@ -442,7 +439,6 @@ void EnviarMensagemAoServidorBot(BOT_CONTEXT* ctx, const MESSAGE* msg) {
 }
 
 
-// --- Bot Core Logic ---
 void BotLoopPrincipal(BOT_CONTEXT* ctx) {
     DWORD dwTimeoutBase = ctx->reactionTimeSeconds * 1000;
 
@@ -472,7 +468,7 @@ void BotLoopPrincipal(BOT_CONTEXT* ctx) {
         DWORD waitResult = WaitForSingleObject(ctx->hMutexShmBot, 1000);
 
         if (waitResult == WAIT_OBJECT_0) {
-            if (ctx->pDadosShmBot) { // Double check after acquiring mutex
+            if (ctx->pDadosShmBot) { 
                 isGameCurrentlyActive = ctx->pDadosShmBot->jogoAtivo;
 
                 shmReadSuccess = TRUE;
@@ -493,18 +489,14 @@ void BotLoopPrincipal(BOT_CONTEXT* ctx) {
         }
 
         if (!shmReadSuccess) {
-            Sleep(1000); // If SHM wasn't read properly, wait before next cycle
+            Sleep(1000);
             continue;
         }
 
-        if (isGameCurrentlyActive) {
-
+        if (isGameCurrentlyActive){
             TentarEncontrarEEnviarPalavra(ctx);
         }
-        else {
-
-            // No action needed if game is not active, loop will continue to wait
-        }
+ 
     }
 }
 
@@ -532,15 +524,15 @@ BOOL TentarEncontrarEEnviarPalavra(BOT_CONTEXT* ctx) {
                 return FALSE;
             }
             ctx->botUltimaGeracaoConhecidaShm = ctx->pDadosShmBot->generationCount;
-            shmGeneration = ctx->pDadosShmBot->generationCount; // For logging
+            shmGeneration = ctx->pDadosShmBot->generationCount; 
 
             numLetrasNoTabuleiro = ctx->pDadosShmBot->numMaxLetrasAtual;
-            if (numLetrasNoTabuleiro > MAX_LETRAS_TABULEIRO) numLetrasNoTabuleiro = MAX_LETRAS_TABULEIRO; // Boundary check
+            if (numLetrasNoTabuleiro > MAX_LETRAS_TABULEIRO) numLetrasNoTabuleiro = MAX_LETRAS_TABULEIRO; 
 
             for (int i = 0; i < numLetrasNoTabuleiro; ++i) {
                 letrasAtuais[i] = ctx->pDadosShmBot->letrasVisiveis[i];
             }
-            letrasAtuais[numLetrasNoTabuleiro] = _T('\0'); // Null-terminate
+            letrasAtuais[numLetrasNoTabuleiro] = _T('\0'); 
         }
         else {
             ReleaseMutex(ctx->hMutexShmBot);
@@ -555,7 +547,7 @@ BOOL TentarEncontrarEEnviarPalavra(BOT_CONTEXT* ctx) {
     }
     else {
         LogErrorBot(ctx, _T("Erro ao adquirir mutex da SHM para ler letras: %lu"), GetLastError());
-        ctx->botRodando = FALSE; // Critical error
+        ctx->botRodando = FALSE; 
         return FALSE;
     }
 
@@ -569,7 +561,7 @@ BOOL TentarEncontrarEEnviarPalavra(BOT_CONTEXT* ctx) {
     DWORD startIndex = rand() % ctx->totalPalavrasBotDicionario;
 
     for (DWORD i = 0; i < ctx->totalPalavrasBotDicionario; ++i) {
-        if (!ctx->botRodando) return FALSE; // Check if bot should stop
+        if (!ctx->botRodando) return FALSE; 
 
         DWORD currentIndex = (startIndex + i) % ctx->totalPalavrasBotDicionario;
         if (ctx->botDicionario[currentIndex] == NULL) continue;
@@ -581,7 +573,7 @@ BOOL TentarEncontrarEEnviarPalavra(BOT_CONTEXT* ctx) {
             _tcscpy_s(msgPalavra.username, _countof(msgPalavra.username), ctx->botUsername);
             _tcscpy_s(msgPalavra.data, _countof(msgPalavra.data), ctx->botDicionario[currentIndex]);
 
-            LogBot(ctx, _T("Encontrou '%s' com letras [%s] (gera��o %ld). Tentando enviar."), ctx->botDicionario[currentIndex], letrasAtuais, shmGeneration);
+            LogBot(ctx, _T("Encontrou '%s' com letras [%s] (geração %ld). Tentando enviar."), ctx->botDicionario[currentIndex], letrasAtuais, shmGeneration);
             EnviarMensagemAoServidorBot(ctx, &msgPalavra);
 
             return TRUE;
@@ -614,7 +606,7 @@ BOOL PodeFormarPalavra(const TCHAR* palavra, const TCHAR* letrasDisponiveisNoTab
     for (int i = 0; i < effectiveLen; ++i) {
         copiaLetras[i] = _totupper(letrasDisponiveisNoTabuleiro[i]);
     }
-    copiaLetras[effectiveLen] = _T('\0'); // Null-terminate the copy
+    copiaLetras[effectiveLen] = _T('\0');
 
     size_t lenPalavra = _tcslen(palavra);
 
@@ -642,19 +634,19 @@ DWORD WINAPI ThreadReceptorMensagensServidorBot(LPVOID param) {
     MESSAGE msgDoServidor;
     DWORD bytesLidos;
     OVERLAPPED ovReadPipe; ZeroMemory(&ovReadPipe, sizeof(OVERLAPPED));
-    ovReadPipe.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL); // Manual-reset, initially non-signaled
+    ovReadPipe.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL); 
 
     if (ovReadPipe.hEvent == NULL) {
 
         LogErrorBot(ctx, _T("TRA: Falha ao criar evento de leitura do pipe. Encerrando thread receptora."));
-        if (ctx) ctx->botRodando = FALSE; // Signal main loop to stop
+        if (ctx) ctx->botRodando = FALSE; 
         return 1;
     }
 
     LogBot(ctx, _T("TRA: Thread receptora de mensagens iniciada."));
 
     while (ctx->botRodando) {
-        ResetEvent(ovReadPipe.hEvent); // Reset event before each ReadFile call
+        ResetEvent(ovReadPipe.hEvent);
         BOOL sucessoLeitura = ReadFile(ctx->hPipeServidorBot, &msgDoServidor, sizeof(MESSAGE), &bytesLidos, &ovReadPipe);
         DWORD dwError = GetLastError();
 
@@ -710,7 +702,7 @@ DWORD WINAPI ThreadReceptorMensagensServidorBot(LPVOID param) {
 
             if (_tcscmp(msgDoServidor.type, _T("SHUTDOWN")) == 0) {
                 LogWarningBot(ctx, _T("TRA: Recebida mensagem SHUTDOWN do servidor. Encerrando bot..."));
-                ctx->botRodando = FALSE; // This will terminate all loops
+                ctx->botRodando = FALSE; 
             }
             else if (_tcscmp(msgDoServidor.type, _T("JOIN_OK")) == 0) {
                 LogBot(ctx, _T("TRA: Bot '%s' juntou-se ao jogo com sucesso: %s"), ctx->botUsername, msgDoServidor.data);
@@ -724,13 +716,13 @@ DWORD WINAPI ThreadReceptorMensagensServidorBot(LPVOID param) {
 
                 if (_tcscmp(msgDoServidor.username, ctx->botUsername) == 0) {
                     EnterCriticalSection(&ctx->csBotData);
-                    ctx->botScore = (float)msgDoServidor.pontos; // Assume points is the total score
+                    ctx->botScore = (float)msgDoServidor.pontos;
                     LeaveCriticalSection(&ctx->csBotData);
                     LogBot(ctx, _T("Minha pontuação total atualizada para: %.1f"), ctx->botScore);
                 }
             }
             else if (_tcscmp(msgDoServidor.type, _T("WORD_VALID")) == 0) {
-                if (_tcscmp(msgDoServidor.username, ctx->botUsername) == 0) { // Check if it's our word
+                if (_tcscmp(msgDoServidor.username, ctx->botUsername) == 0) { 
                     LogBot(ctx, _T("Minha palavra '%s' foi aceite! (+%d pontos)"), msgDoServidor.data, msgDoServidor.pontos);
                     EnterCriticalSection(&ctx->csBotData);
                     ctx->botScore += (float)msgDoServidor.pontos;
@@ -742,10 +734,10 @@ DWORD WINAPI ThreadReceptorMensagensServidorBot(LPVOID param) {
                 }
             }
             else if (_tcscmp(msgDoServidor.type, _T("WORD_INVALID")) == 0) {
-                if (_tcscmp(msgDoServidor.username, ctx->botUsername) == 0) { // Check if it's our word
-                    LogBot(ctx, _T("Minha palavra '%s' foi inv�lida/rejeitada. (%d pontos)"), msgDoServidor.data, msgDoServidor.pontos);
+                if (_tcscmp(msgDoServidor.username, ctx->botUsername) == 0) { 
+                    LogBot(ctx, _T("Minha palavra '%s' foi inválida/rejeitada. (%d pontos)"), msgDoServidor.data, msgDoServidor.pontos);
                     EnterCriticalSection(&ctx->csBotData);
-                    ctx->botScore += (float)msgDoServidor.pontos; // Points could be negative
+                    ctx->botScore += (float)msgDoServidor.pontos; 
                     LeaveCriticalSection(&ctx->csBotData);
                     LogBot(ctx, _T("Minha pontuação agora: %.1f"), ctx->botScore);
                 }
@@ -763,12 +755,12 @@ DWORD WINAPI ThreadReceptorMensagensServidorBot(LPVOID param) {
             }
 
         }
-        else if (sucessoLeitura && bytesLidos == 0) { // Graceful disconnect (EOF)
+        else if (sucessoLeitura && bytesLidos == 0) { 
             if (ctx->botRodando) {
                 LogWarningBot(ctx, _T("TRA: Servidor fechou a conexão (EOF). Encerrando bot."));
                 ctx->botRodando = FALSE;
             }
-            break; // Exit thread loop
+            break;
         }
         else if (bytesLidos != 0) {
             if (ctx->botRodando) {

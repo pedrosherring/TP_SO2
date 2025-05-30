@@ -7,15 +7,15 @@
 
 #include "../Comum/compartilhado.h" 
 
-// Bot's dictionary settings
-#define MAX_BOT_DICT_WORDS 20000 // Max words bot can load
+
+#define MAX_BOT_DICT_WORDS 20000 
 
 
 #ifndef _countof
 #define _countof(array) (sizeof(array) / sizeof(array[0]))
 #endif
 
-// --- Bot Context Structure ---
+
 typedef struct {
     TCHAR botUsername[MAX_USERNAME];
     int reactionTimeSeconds;
@@ -39,7 +39,7 @@ typedef struct {
     HANDLE hThreadReceptorPipeBot;
 } BOT_CONTEXT;
 
-// --- Function Prototypes (taking BOT_CONTEXT*) ---
+
 void LogBot(BOT_CONTEXT* ctx, const TCHAR* format, ...);
 void LogErrorBot(BOT_CONTEXT* ctx, const TCHAR* format, ...);
 void LogWarningBot(BOT_CONTEXT* ctx, const TCHAR* format, ...);
